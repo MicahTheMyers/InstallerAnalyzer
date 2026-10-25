@@ -22,7 +22,7 @@ public sealed class UpdateService
 
     public UpdateService()
     {
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("InstallerAnalyzer/0.9.4");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("InstallerAnalyzer/0.9.5");
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         _http.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
         _http.Timeout = TimeSpan.FromSeconds(20);
@@ -33,7 +33,7 @@ public sealed class UpdateService
     public async Task<UpdateInfo?> GetLatestAsync(CancellationToken cancellationToken = default)
     {
         using var response = await _http.GetAsync(LatestReleaseApi, cancellationToken);
-        if (response.StatusCode == HttpStatusCode.NotFound) return null; // repository has no published releases yet
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         var release = await JsonSerializer.DeserializeAsync<GitHubRelease>(stream, cancellationToken: cancellationToken)
@@ -71,8 +71,6 @@ public sealed class UpdateService
             await output.FlushAsync(cancellationToken);
         }
 
-        // The download stream must be closed before SHA-256 verification or the
-        // installer process can open the file on Windows.
         VerifyDigest(destination, asset.Digest);
         return destination;
     }
