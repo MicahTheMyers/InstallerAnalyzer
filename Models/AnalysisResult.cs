@@ -1,6 +1,6 @@
 using System.IO;
 namespace InstallerAnalyzer.Models;
-public enum InstallerKind { Unknown, Msi, InstallShield, InnoSetup, Nsis, WixBurn }
+public enum InstallerKind { Unknown, Msi, InstallShield, InnoSetup, Nsis, WixBurn, Squirrel, NvidiaSfx, QSetup, Bootstrapper }
 public sealed class AnalysisResult
 {
     public string FilePath { get; set; } = "";
@@ -14,4 +14,6 @@ public sealed class AnalysisResult
     public string SuggestedArguments { get; set; } = "";
     public List<string> Evidence { get; } = new();
     public bool NeedsIss { get; set; }
+    public bool IsPerUser { get; set; }
+    public string ExpectedInstallRoot { get; set; } = "";
 }

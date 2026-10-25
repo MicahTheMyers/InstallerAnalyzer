@@ -22,7 +22,7 @@ public sealed class UpdateService
 
     public UpdateService()
     {
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("InstallerAnalyzer/0.9.5");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("InstallerAnalyzer/0.10.9");
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         _http.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
         _http.Timeout = TimeSpan.FromSeconds(20);

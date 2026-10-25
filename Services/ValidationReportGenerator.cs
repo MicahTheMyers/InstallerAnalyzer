@@ -16,6 +16,16 @@ public static class ValidationReportGenerator
         sb.AppendLine($"Installer: {analysis.Installer ?? "Unknown"}");
         sb.AppendLine($"Captured: {analysis.CapturedAt ?? "Unknown"}");
         sb.AppendLine();
+        if (!string.IsNullOrWhiteSpace(analysis.SilentInstallCommand))
+        {
+            sb.AppendLine($"Silent install command: {analysis.SilentInstallCommand}");
+            sb.AppendLine($"Base silent arguments: {analysis.BaseSilentArguments ?? ""}");
+            sb.AppendLine($"Additional package arguments: {analysis.AdditionalPackageArguments ?? ""}");
+            sb.AppendLine($"Combined silent arguments: {analysis.CombinedSilentArguments ?? ""}");
+            if (!string.IsNullOrWhiteSpace(analysis.SilentInstallStdOut)) sb.AppendLine($"Silent install stdout: {analysis.SilentInstallStdOut.Trim()}");
+            if (!string.IsNullOrWhiteSpace(analysis.SilentInstallStdErr)) sb.AppendLine($"Silent install stderr: {analysis.SilentInstallStdErr.Trim()}");
+            sb.AppendLine();
+        }
 
         if (analysis.InstallerExitCode == 0 || analysis.InstallerExitCode == 3010)
             sb.AppendLine($"[PASS] Install exit code: {analysis.InstallerExitCode}" + (analysis.InstallerExitCode == 3010 ? " (success, reboot required)" : ""));
@@ -55,7 +65,7 @@ public static class ValidationReportGenerator
             if (analysis.UninstallRecordingAttempted)
                 sb.AppendLine(analysis.UninstallResponseFileCreated ? "[PASS] InstallShield uninstall response file recorded (uninstall.iss)." : "[FAIL] uninstall.iss response file was not created.");
             if (analysis.SilentReinstallExitCode.HasValue)
-                sb.AppendLine(analysis.SilentReinstallExitCode is 0 or 3010 ? $"[PASS] Silent reinstall exit code: {analysis.SilentReinstallExitCode}" : $"[FAIL] Silent reinstall exit code: {analysis.SilentReinstallExitCode}");
+                sb.AppendLine(analysis.SilentReinstallValidated ? $"[PASS] Silent reinstall validated (exit code {analysis.SilentReinstallExitCode} + application detected)." : $"[FAIL] Silent reinstall was not validated (exit code {analysis.SilentReinstallExitCode}; application detection failed or was incomplete).");
             if (analysis.SilentUninstallExitCode.HasValue)
                 sb.AppendLine(analysis.SilentUninstallExitCode is 0 or 1605 or 3010 ? $"[PASS] Silent uninstall exit code: {analysis.SilentUninstallExitCode}" : $"[FAIL] Silent uninstall exit code: {analysis.SilentUninstallExitCode}");
             if (analysis.PostUninstallDetected.HasValue)

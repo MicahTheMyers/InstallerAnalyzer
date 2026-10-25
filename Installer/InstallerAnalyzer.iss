@@ -1,5 +1,5 @@
 #define MyAppName "Installer Analyzer for ImmyBot"
-#define MyAppVersion "0.9.5"
+#define MyAppVersion "0.10.9"
 #define MyAppPublisher "InstallerAnalyzer"
 #define MyAppURL "https://github.com/MicahTheMyers/InstallerAnalyzer"
 #define MyAppExeName "InstallerAnalyzer.exe"

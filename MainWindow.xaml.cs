@@ -53,6 +53,7 @@ public partial class MainWindow : Window
         LoadAppSettings();
         RefreshSandboxSettings();
         UpdateSandboxPage();
+        RefreshHistory();
         Loaded += MainWindow_Loaded;
     }
 
@@ -73,8 +74,9 @@ public partial class MainWindow : Window
             FileText.Text = path; KindBox.SelectedItem = _result.Kind; ConfidenceText.Text = $"{_result.Confidence}%"; ConfidenceBar.Value = _result.Confidence;
             StatusText.Text = $"Analyzed {Path.GetFileName(path)}"; ArchText.Text = _result.Architecture;
             ProductBox.Text = string.IsNullOrWhiteSpace(_result.ProductName) ? Path.GetFileNameWithoutExtension(path) : _result.ProductName;
-            CompanyText.Text = _result.CompanyName; VersionText.Text = _result.FileVersion; ArgumentsBox.Text = _result.SuggestedArguments;
-            IssCheck.IsChecked = _result.NeedsIss; EvidenceList.ItemsSource = _result.Evidence; UpdateSandboxControls(); UpdateSandboxPage(); Generate(); UpdateImmyBotPage();
+            CompanyText.Text = _result.CompanyName; VersionText.Text = _result.FileVersion; ArgumentsBox.Text = _result.SuggestedArguments; AdditionalArgumentsBox.Text = string.Empty;
+            ConfigurePackageProfile();
+            IssCheck.IsChecked = _result.NeedsIss; EvidenceList.ItemsSource = _result.Evidence; UpdateSandboxControls(); UpdateSandboxPage(); Generate(); UpdateImmyBotPage(); SaveHistorySnapshot();
         }
         catch (Exception ex) { MessageBox.Show(ex.Message, "Analysis failed", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
@@ -89,7 +91,7 @@ public partial class MainWindow : Window
             ScriptView.Detection => ImmyBotScriptGenerator.GenerateDetection(_selectedUninstallEntry, ProductBox.Text),
             ScriptView.Uninstall => ImmyBotScriptGenerator.GenerateUninstall(_selectedUninstallEntry, ProductBox.Text, _installAnalysis),
             ScriptView.Validation => ValidationReportGenerator.Generate(_installAnalysis, _selectedUninstallEntry, ProductBox.Text),
-            _ => ImmyBotScriptGenerator.Generate(_result, ArgumentsBox.Text, ProductBox.Text)
+            _ => ImmyBotScriptGenerator.Generate(_result, EffectiveSilentArguments(), ProductBox.Text)
         };
         SetHighlightedScript(script);
         UpdateImmyBotPage();
@@ -113,8 +115,14 @@ public partial class MainWindow : Window
     {
         var isInstallShield = _result?.Kind == InstallerKind.InstallShield || KindBox.SelectedItem is InstallerKind.InstallShield;
         RecordIssButton.IsEnabled = _installerPath is not null && isInstallShield;
+        RecordIssButton.Visibility = isInstallShield ? Visibility.Visible : Visibility.Collapsed;
+        IssCheck.Visibility = isInstallShield ? Visibility.Visible : Visibility.Collapsed;
+        OpenIssButton.Visibility = isInstallShield ? Visibility.Visible : Visibility.Collapsed;
+        if (!isInstallShield) OpenIssButton.IsEnabled = false;
         SidebarSandboxButton.IsEnabled = true;
-        if (!isInstallShield) IssStatusText.Text = "setup.iss recording is only enabled for InstallShield installers.";
+        if (_result?.Kind == InstallerKind.Squirrel) IssStatusText.Text = "Squirrel.Windows detected: response file not required. Uses --silent and normally installs per-user under %LocalAppData%.";
+        else if (_result?.Kind == InstallerKind.QSetup) IssStatusText.Text = "QSetup detected: response file not required. /Hide lifecycle behavior is Sandbox validated; package-specific arguments may also be required.";
+        else if (!isInstallShield) IssStatusText.Text = "setup.iss recording is only enabled for InstallShield installers.";
         else if (SandboxToggle.IsChecked == true && !SandboxIssRecorder.IsSandboxAvailable()) IssStatusText.Text = "Sandbox mode is selected, but Windows Sandbox is not enabled. Open Settings to enable it in Windows Features.";
         else if (SandboxToggle.IsChecked == true) IssStatusText.Text = "Ready to record setup.iss safely in Windows Sandbox.";
         else IssStatusText.Text = "Local mode selected. Generating setup.iss will run the installer on this computer.";
@@ -135,7 +143,8 @@ public partial class MainWindow : Window
                     if (answer == MessageBoxResult.Yes) OpenWindowsFeatures();
                     return;
                 }
-                _issSession = SandboxIssRecorder.Start(_installerPath);
+                _issSession = SandboxIssRecorder.Start(_installerPath, _result?.Kind ?? InstallerKind.Unknown, _result?.NeedsIss == true,
+                    ArgumentsBox.Text?.Trim() ?? string.Empty, AdditionalArgumentsBox.Text?.Trim() ?? string.Empty);
                 _sandboxWindow = IntPtr.Zero;
                 _integratedViewerActive = false;
                 _sandboxWindowTimer.Start();
@@ -143,10 +152,10 @@ public partial class MainWindow : Window
                 SandboxOpenOutputButton.IsEnabled = true;
                 ShowPage(SandboxPage);
                 SandboxRunStatus.Text = "Starting Windows Sandbox…";
-                SandboxRunDetails.Text = $"Analyzing {Path.GetFileName(_installerPath)}. v0.9.1 will guide validation and prepare the deployment for ImmyBot export.";
+                SandboxRunDetails.Text = $"Analyzing {Path.GetFileName(_installerPath)} using the {_result?.Kind ?? InstallerKind.Unknown} strategy.";
                 SandboxArtifactText.Text = $"Output: {_issSession.OutputFolder}";
-                IssStatusText.Text = "Windows Sandbox started. Follow the v0.9.1 prompts for install and uninstall validation.";
-                StatusText.Text = "Sandbox ISS recording in progress";
+                IssStatusText.Text = _result?.NeedsIss == true ? "Windows Sandbox started. Complete the interactive InstallShield recording workflow." : "Windows Sandbox started. Complete the installer normally; Installer Analyzer will capture the installed application and registry changes.";
+                StatusText.Text = _result?.NeedsIss == true ? "Sandbox ISS recording in progress" : "Sandbox installation analysis in progress";
             }
             else
             {
@@ -156,7 +165,7 @@ public partial class MainWindow : Window
                 IssStatusText.Text = "Installer started locally in record mode. Complete it normally. Waiting for setup.iss…";
                 StatusText.Text = "Local ISS recording in progress";
             }
-            OpenIssButton.IsEnabled = true; _issTimer.Start();
+            OpenIssButton.IsEnabled = _issSession.RequiresIss; _issTimer.Start();
         }
         catch (Exception ex) { MessageBox.Show(ex.Message, "ISS recorder", MessageBoxButton.OK, MessageBoxImage.Error); UpdateSandboxControls(); }
     }
@@ -181,20 +190,28 @@ public partial class MainWindow : Window
             }
             catch { }
         }
-        if (!File.Exists(_issSession.IssPath)) return;
-
-        // Sandbox writes setup.iss and install-analysis.json separately. On fast installs the ISS
-        // can appear first, so keep polling until the analysis file has also been consumed.
-        var sandboxSession = !string.IsNullOrWhiteSpace(_issSession.WsbPath);
-        if (sandboxSession && !_analysisLoaded)
+        var requiresIss = _issSession.RequiresIss;
+        if (!_analysisLoaded)
         {
-            IssStatusText.Text = "setup.iss created. Waiting for Sandbox installation analysis…";
+            if (requiresIss && File.Exists(_issSession.IssPath)) IssStatusText.Text = "setup.iss created. Waiting for Sandbox installation analysis…";
             StatusText.Text = "Waiting for installation analysis";
             return;
         }
+        if (requiresIss && !File.Exists(_issSession.IssPath)) return;
 
-        _issTimer.Stop(); UpdateSandboxDashboard(); SandboxRunStatus.Text = "Analysis complete"; SandboxRunDetails.Text = _selectedUninstallEntry is null ? "Sandbox completed. No primary application was identified." : $"Detected {_selectedUninstallEntry.DisplayName} {_selectedUninstallEntry.DisplayVersion}. Generated setup.iss and installation analysis."; IssCheck.IsChecked = true; IssStatusText.Text = $"setup.iss created: {_issSession.IssPath}"; StatusText.Text = _selectedUninstallEntry is null ? "setup.iss recorded successfully" : "setup.iss + install analysis captured";
-        ArgumentsBox.Text = "/s /f1`\"$ResponseFile`\""; _scriptView = ScriptView.Install; Generate();
+        _issTimer.Stop(); UpdateSandboxDashboard(); SandboxRunStatus.Text = "Analysis complete";
+        SandboxRunDetails.Text = _selectedUninstallEntry is null ? "Sandbox completed. No primary application was identified." : $"Detected {_selectedUninstallEntry.DisplayName} {_selectedUninstallEntry.DisplayVersion}. Installation analysis captured.";
+        if (requiresIss)
+        {
+            IssCheck.IsChecked = true; IssStatusText.Text = $"setup.iss created: {_issSession.IssPath}"; ArgumentsBox.Text = "/s /f1`\"$ResponseFile`\"";
+            StatusText.Text = _selectedUninstallEntry is null ? "setup.iss recorded successfully" : "setup.iss + install analysis captured";
+        }
+        else
+        {
+            IssCheck.IsChecked = false; IssStatusText.Text = "Installation analysis captured. This installer strategy does not require setup.iss.";
+            StatusText.Text = _selectedUninstallEntry is null ? "Installation analysis captured" : "Installed application identified";
+        }
+        _scriptView = ScriptView.Install; Generate();
         var details = _selectedUninstallEntry is null ? "No new uninstall registry entry was identified." : $"Detected: {_selectedUninstallEntry.DisplayName} {_selectedUninstallEntry.DisplayVersion}\n\nDetection, Uninstall, and Validation results are now available.";
         MessageBox.Show("Sandbox analysis completed.\n\n" + details, "Installation analysis complete", MessageBoxButton.OK, MessageBoxImage.Information);
     }
@@ -245,13 +262,69 @@ public partial class MainWindow : Window
     private static string NormalizeName(string value)
         => new(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 
+    private bool IsEnsoftQSetupProfile()
+        => _result?.Kind == InstallerKind.QSetup &&
+           ((_result.CompanyName?.Contains("Ensoft", StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (_result.ProductName?.Contains("LPILE", StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (_result.ProductName?.Contains("LPile", StringComparison.OrdinalIgnoreCase) ?? false));
+
+    private void ConfigurePackageProfile()
+    {
+        if (EnsoftProfilePanel is null || EnsoftLicenseBox is null) return;
+        var enabled = IsEnsoftQSetupProfile();
+        EnsoftProfilePanel.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        if (!enabled) return;
+
+        if (_result is not null && !_result.Evidence.Contains("Validated Ensoft QSetup deployment profile available: /silent /[EULA_accept]=Yes plus /[License]=... ."))
+            _result.Evidence.Add("Validated Ensoft QSetup deployment profile available: /silent /[EULA_accept]=Yes plus /[License]=... .");
+
+        // Cloud is the validated LPile profile. The user can switch to Single User or Network Client.
+        EnsoftLicenseBox.SelectedIndex = 0;
+        ApplyEnsoftLicenseProfile();
+    }
+
+    private void EnsoftLicenseBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded || !IsEnsoftQSetupProfile()) return;
+        ApplyEnsoftLicenseProfile();
+        Generate();
+    }
+
+    private void ApplyEnsoftLicenseProfile()
+    {
+        if (!IsEnsoftQSetupProfile() || EnsoftLicenseBox is null) return;
+        switch (EnsoftLicenseBox.SelectedIndex)
+        {
+            case 1:
+                AdditionalArgumentsBox.Text = "/silent /[EULA_accept]=Yes /[License]=single";
+                EnsoftProfileHint.Text = "Single-user license profile. Ensoft EULA acceptance syntax is included automatically.";
+                break;
+            case 2:
+                AdditionalArgumentsBox.Text = "/silent /[EULA_accept]=Yes /[License]=client";
+                EnsoftProfileHint.Text = "Network client selected. Add the environment-specific /[ServerIP]=... value to Additional package arguments if required by this package.";
+                break;
+            default:
+                AdditionalArgumentsBox.Text = "/silent /[EULA_accept]=Yes /[License]=cloud";
+                EnsoftProfileHint.Text = "Cloud Subscription profile. This exact LPile/QSetup syntax has passed silent reinstall and uninstall lifecycle validation.";
+                break;
+        }
+    }
+
+    private string EffectiveSilentArguments()
+    {
+        var baseArgs = ArgumentsBox.Text?.Trim() ?? string.Empty;
+        var extraArgs = AdditionalArgumentsBox.Text?.Trim() ?? string.Empty;
+        return string.Join(" ", new[] { baseArgs, extraArgs }.Where(x => !string.IsNullOrWhiteSpace(x)));
+    }
+
     private void OpenIss_Click(object sender, RoutedEventArgs e) { if (_issSession is null) return; Directory.CreateDirectory(_issSession.OutputFolder); Process.Start(new ProcessStartInfo { FileName = _issSession.OutputFolder, UseShellExecute = true }); }
 
     private void KindBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_result is null || KindBox.SelectedItem is not InstallerKind k) return;
         _result.Kind = k; UpdateSandboxControls();
-        ArgumentsBox.Text = k switch { InstallerKind.Msi => "/qn /norestart", InstallerKind.InnoSetup => "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-", InstallerKind.Nsis => "/S", InstallerKind.WixBurn => "/quiet /norestart", InstallerKind.InstallShield when IssCheck.IsChecked == true => "/s /f1`\"$ResponseFile`\"", InstallerKind.InstallShield => "/s", _ => ArgumentsBox.Text };
+        ArgumentsBox.Text = k switch { InstallerKind.Msi => "/qn /norestart", InstallerKind.InnoSetup => "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-", InstallerKind.Nsis => "/S", InstallerKind.WixBurn => "/quiet /norestart", InstallerKind.Squirrel => "--silent", InstallerKind.NvidiaSfx => "-s", InstallerKind.QSetup => "/Hide", InstallerKind.InstallShield when IssCheck.IsChecked == true => "/s /f1`\"$ResponseFile`\"", InstallerKind.InstallShield => "/s", _ => ArgumentsBox.Text };
+        ConfigurePackageProfile();
     }
     private void IssCheck_Changed(object sender, RoutedEventArgs e)
     {
@@ -262,14 +335,15 @@ public partial class MainWindow : Window
     private void AnalyzeNav_Click(object sender, RoutedEventArgs e) => ShowPage(AnalyzePage);
     private void SandboxNav_Click(object sender, RoutedEventArgs e) { UpdateSandboxPage(); ShowPage(SandboxPage); }
     private void ImmyBotNav_Click(object sender, RoutedEventArgs e) { UpdateImmyBotPage(); ShowPage(ImmyBotPage); }
+    private void HistoryNav_Click(object sender, RoutedEventArgs e) { RefreshHistory(); ShowPage(HistoryPage); }
     private void SettingsNav_Click(object sender, RoutedEventArgs e) { RefreshSandboxSettings(); ShowPage(SettingsPage); }
     private void AboutNav_Click(object sender, RoutedEventArgs e) => ShowPage(AboutPage);
     private void ShowPage(UIElement page)
     {
-        AnalyzePage.Visibility = Visibility.Collapsed; SandboxPage.Visibility = Visibility.Collapsed; ImmyBotPage.Visibility = Visibility.Collapsed; SettingsPage.Visibility = Visibility.Collapsed; AboutPage.Visibility = Visibility.Collapsed;
+        AnalyzePage.Visibility = Visibility.Collapsed; SandboxPage.Visibility = Visibility.Collapsed; ImmyBotPage.Visibility = Visibility.Collapsed; HistoryPage.Visibility = Visibility.Collapsed; SettingsPage.Visibility = Visibility.Collapsed; AboutPage.Visibility = Visibility.Collapsed;
         page.Visibility = Visibility.Visible;
-        foreach (var b in new[] { AnalyzeNavButton, SidebarSandboxButton, ImmyBotNavButton, SettingsNavButton, AboutNavButton }) b.Background = Brushes.Transparent;
-        var active = ReferenceEquals(page, AnalyzePage) ? AnalyzeNavButton : ReferenceEquals(page, SandboxPage) ? SidebarSandboxButton : ReferenceEquals(page, ImmyBotPage) ? ImmyBotNavButton : ReferenceEquals(page, SettingsPage) ? SettingsNavButton : AboutNavButton;
+        foreach (var b in new[] { AnalyzeNavButton, SidebarSandboxButton, ImmyBotNavButton, HistoryNavButton, SettingsNavButton, AboutNavButton }) b.Background = Brushes.Transparent;
+        var active = ReferenceEquals(page, AnalyzePage) ? AnalyzeNavButton : ReferenceEquals(page, SandboxPage) ? SidebarSandboxButton : ReferenceEquals(page, ImmyBotPage) ? ImmyBotNavButton : ReferenceEquals(page, HistoryPage) ? HistoryNavButton : ReferenceEquals(page, SettingsPage) ? SettingsNavButton : AboutNavButton;
         active.Background = (Brush)Resources["AccentSoft"];
     }
 
@@ -279,11 +353,11 @@ public partial class MainWindow : Window
     {
         if (SandboxModeBadge is null) return;
         SandboxModeBadge.Text = UseIntegratedViewer ? "Integrated Viewer" : "Separate Window";
-        StartSandboxButton.IsEnabled = _installerPath is not null && (_result?.Kind == InstallerKind.InstallShield || KindBox.SelectedItem is InstallerKind.InstallShield);
+        StartSandboxButton.IsEnabled = _installerPath is not null && (_result is not null || KindBox.SelectedItem is InstallerKind);
         if (_issSession is null)
         {
             SandboxRunStatus.Text = SandboxIssRecorder.IsSandboxAvailable() ? "Ready" : "Windows Sandbox unavailable";
-            SandboxRunDetails.Text = _installerPath is null ? "Select an InstallShield installer on the Analyze page, then start Sandbox analysis here." : $"Ready to analyze {Path.GetFileName(_installerPath)}.";
+            SandboxRunDetails.Text = _installerPath is null ? "Select an installer on the Analyze page." : _result?.Kind == InstallerKind.Squirrel ? $"{Path.GetFileName(_installerPath)} is Squirrel.Windows. No .iss is required. Full Squirrel lifecycle validation is intentionally not enabled until its per-user uninstall path is validated." : _result?.Kind == InstallerKind.NvidiaSfx ? $"{Path.GetFileName(_installerPath)} is an NVIDIA 7-Zip SFX bootstrapper. No InstallShield .iss is expected; NVIDIA uses its own setup engine." : _result?.Kind == InstallerKind.QSetup ? $"{Path.GetFileName(_installerPath)} is QSetup. No .iss is required; /Hide is the validated base strategy. Review any package-specific arguments before starting analysis." : $"Ready to analyze {Path.GetFileName(_installerPath)}.";
         }
         SandboxPlaceholderText.Visibility = _integratedViewerActive ? Visibility.Collapsed : Visibility.Visible;
         SandboxPreviewImage.Visibility = _integratedViewerActive ? Visibility.Visible : Visibility.Collapsed;
@@ -301,15 +375,26 @@ public partial class MainWindow : Window
         else
         {
             stages.Add("✓ Sandbox session started");
-            stages.Add(File.Exists(_issSession.IssPath) ? "✓ setup.iss captured" : "◉ Installing / recording setup.iss");
+            stages.Add(_issSession.RequiresIss ? (File.Exists(_issSession.IssPath) ? "✓ setup.iss captured" : "◉ Installing / recording setup.iss") : "✓ Response file not required");
             stages.Add(_analysisLoaded ? "✓ Installation analysis captured" : "○ Waiting for registry analysis");
             if (_installAnalysis is not null)
             {
                 stages.Add(_selectedUninstallEntry is not null ? $"✓ Primary app: {_selectedUninstallEntry.DisplayName} {_selectedUninstallEntry.DisplayVersion}".Trim() : "! Primary application not identified");
-                stages.Add(_installAnalysis.UninstallResponseFileCreated ? "✓ uninstall.iss captured" : "○ Waiting for uninstall recording");
-                stages.Add(_installAnalysis.SilentReinstallExitCode == 0 ? "✓ Silent reinstall validated" : "○ Silent reinstall pending");
-                stages.Add(_installAnalysis.SilentUninstallValidated ? "✓ Silent uninstall validated" : "○ Silent uninstall validation pending");
-                stages.Add(_installAnalysis.PostUninstallDetected == false ? "✓ Post-uninstall detection passed" : "○ Removal verification pending");
+                if (_issSession.RequiresIss)
+                    stages.Add(_installAnalysis.UninstallResponseFileCreated ? "✓ uninstall.iss captured" : "○ Waiting for uninstall recording");
+                else if (!string.IsNullOrWhiteSpace(_selectedUninstallEntry?.QuietUninstallString))
+                    stages.Add("✓ Silent uninstall method captured");
+                else if (!string.IsNullOrWhiteSpace(_installAnalysis.UninstallCandidate))
+                    stages.Add(_installAnalysis.SilentUninstallValidated
+                        ? $"✓ Silent uninstall validated: {_installAnalysis.UninstallValidationMethod}"
+                        : $"◉ Silent uninstall candidate: {_installAnalysis.UninstallValidationMethod}");
+                else
+                    stages.Add("! No silent uninstall method available");
+                if (!string.IsNullOrWhiteSpace(_installAnalysis.SilentInstallCommand)) stages.Add($"Command: {_installAnalysis.SilentInstallCommand}");
+                stages.Add(_installAnalysis.SilentReinstallValidated ? "✓ Silent reinstall validated" : _installAnalysis.SilentReinstallExitCode is null ? "○ Silent reinstall not attempted" : $"✗ Silent reinstall failed validation (exit {_installAnalysis.SilentReinstallExitCode})");
+                stages.Add(_installAnalysis.SilentUninstallValidated ? "✓ Silent uninstall validated" : _installAnalysis.SilentReinstallValidated ? "○ Silent uninstall validation pending" : "○ Silent uninstall not attempted");
+                stages.Add(_installAnalysis.PostUninstallDetected == false ? "✓ Post-uninstall detection passed" : _installAnalysis.SilentUninstallValidated ? "✓ Removal verified" : "○ Removal verification not completed");
+                if (!string.IsNullOrWhiteSpace(_installAnalysis.ValidationError)) stages.Add($"! {_installAnalysis.ValidationError}");
             }
         }
         SandboxStageList.ItemsSource = stages;
@@ -317,10 +402,19 @@ public partial class MainWindow : Window
         var files = new List<string>();
         if (_issSession is not null)
         {
-            foreach (var name in new[] { "setup.iss", "uninstall.iss", "install-analysis.json" })
+            if (_issSession.RequiresIss)
             {
-                var fp = Path.Combine(_issSession.OutputFolder, name);
-                files.Add((File.Exists(fp) ? "✓ " : "○ ") + name);
+                foreach (var name in new[] { "setup.iss", "uninstall.iss", "install-analysis.json" })
+                {
+                    var fp = Path.Combine(_issSession.OutputFolder, name);
+                    files.Add((File.Exists(fp) ? "✓ " : "○ ") + name);
+                }
+            }
+            else
+            {
+                files.Add("✓ Response files not required");
+                var analysis = Path.Combine(_issSession.OutputFolder, "install-analysis.json");
+                files.Add((File.Exists(analysis) ? "✓ " : "○ ") + "install-analysis.json");
             }
         }
         SandboxFilesList.ItemsSource = files;
@@ -344,6 +438,7 @@ public partial class MainWindow : Window
         ExportImmyBotButton.IsEnabled = ready;
         if (ImmyExportButton is not null) ImmyExportButton.IsEnabled = ready;
         UpdateImmyBotPage();
+        SaveHistorySnapshot();
     }
 
     private void ExportImmyBot_Click(object sender, RoutedEventArgs e)
@@ -378,13 +473,61 @@ public partial class MainWindow : Window
         }
         else
         {
-            SetHighlightedScript(ImmyInstallBox, ImmyBotScriptGenerator.Generate(_result, ArgumentsBox.Text, ProductBox.Text));
+            SetHighlightedScript(ImmyInstallBox, ImmyBotScriptGenerator.Generate(_result, EffectiveSilentArguments(), ProductBox.Text));
             SetHighlightedScript(ImmyDetectionBox, ImmyBotScriptGenerator.GenerateDetection(_selectedUninstallEntry, ProductBox.Text));
             SetHighlightedScript(ImmyUninstallBox, ImmyBotScriptGenerator.GenerateUninstall(_selectedUninstallEntry, ProductBox.Text, _installAnalysis));
         }
         LoadLogoPreview();
         var ready = _installerPath is not null && _selectedUninstallEntry is not null && _installAnalysis?.SilentUninstallValidated == true;
         ImmyExportButton.IsEnabled = ready;
+        UpdateDeploymentIntelligence(ready);
+    }
+
+    private void UpdateDeploymentIntelligence(bool sandboxValidated)
+    {
+        if (DetectionIntelligenceText is null || ScriptInspectionText is null) return;
+        var candidates = DeploymentIntelligenceService.RankDetection(_selectedUninstallEntry);
+        DetectionIntelligenceText.Text = candidates.Count == 0
+            ? "Complete Sandbox analysis to rank detection methods."
+            : string.Join("\n", candidates.Take(4).Select((x, i) => $"{(i == 0 ? "★" : "•")} {x.Name} — {x.Score}/100\n   {x.Detail}"));
+        if (_result is null) { ScriptInspectionText.Text = "Select an installer to inspect generated scripts."; return; }
+        var install = ImmyBotScriptGenerator.Generate(_result, EffectiveSilentArguments(), ProductBox.Text);
+        var detection = ImmyBotScriptGenerator.GenerateDetection(_selectedUninstallEntry, ProductBox.Text);
+        var uninstall = ImmyBotScriptGenerator.GenerateUninstall(_selectedUninstallEntry, ProductBox.Text, _installAnalysis);
+        var inspection = DeploymentIntelligenceService.Inspect(install, detection, uninstall, _result.NeedsIss, sandboxValidated);
+        ScriptInspectionText.Text = $"{(inspection.Passed ? "✓" : "✕")} {inspection.Errors} errors  •  {inspection.Warnings} warnings\n" + string.Join("\n", inspection.Checks);
+    }
+
+    private void SaveHistorySnapshot()
+    {
+        if (_result is null || string.IsNullOrWhiteSpace(_installerPath)) return;
+        var best = DeploymentIntelligenceService.RankDetection(_selectedUninstallEntry).FirstOrDefault();
+        AnalysisHistoryService.Save(new AnalysisHistoryItem
+        {
+            AnalyzedAt = DateTime.Now, InstallerPath = _installerPath, ProductName = ProductBox.Text,
+            Version = _selectedUninstallEntry?.DisplayVersion ?? _result.FileVersion, InstallerType = _result.Kind.ToString(),
+            Confidence = _result.Confidence, SandboxValidated = _installAnalysis?.SilentUninstallValidated == true,
+            DetectionMethod = best?.Name ?? "Pending Sandbox analysis"
+        });
+        RefreshHistory();
+    }
+
+    private void RefreshHistory()
+    {
+        if (HistoryList is null) return;
+        var items = AnalysisHistoryService.Load(); HistoryList.ItemsSource = items;
+        HistoryStatusText.Text = items.Count == 0 ? "No analysis history yet." : $"{items.Count} saved analysis record{(items.Count == 1 ? "" : "s")}.";
+    }
+    private void HistoryList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (HistoryList.SelectedItem is not AnalysisHistoryItem item) return;
+        if (!File.Exists(item.InstallerPath)) { MessageBox.Show("The original installer is no longer available at the saved path.", "Analysis History", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        Analyze(item.InstallerPath); ShowPage(AnalyzePage);
+    }
+    private void ClearHistory_Click(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show("Clear all saved analysis history?", "Analysis History", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        AnalysisHistoryService.Clear(); RefreshHistory();
     }
 
     private void LoadLogoPreview()
@@ -641,7 +784,7 @@ public partial class MainWindow : Window
             : GoldAccentRadio.IsChecked == true ? (light ? "#FEF9C3" : purpleTheme ? "#44351E" : "#44370F")
             : (light ? "#DBEAFE" : purpleTheme ? "#252D62" : "#123967");
         SetThemeBrush("Accent", accent); SetThemeBrush("AccentSoft", soft); SetThemeBrush("Link", accent);
-        ShowPage(AnalyzePage.Visibility == Visibility.Visible ? AnalyzePage : SandboxPage.Visibility == Visibility.Visible ? SandboxPage : ImmyBotPage.Visibility == Visibility.Visible ? ImmyBotPage : SettingsPage.Visibility == Visibility.Visible ? SettingsPage : AboutPage);
+        ShowPage(AnalyzePage.Visibility == Visibility.Visible ? AnalyzePage : SandboxPage.Visibility == Visibility.Visible ? SandboxPage : ImmyBotPage.Visibility == Visibility.Visible ? ImmyBotPage : HistoryPage.Visibility == Visibility.Visible ? HistoryPage : SettingsPage.Visibility == Visibility.Visible ? SettingsPage : AboutPage);
     }
 
     private void SetThemeBrush(string key, string hex) => Resources[key] = BrushFrom(hex);

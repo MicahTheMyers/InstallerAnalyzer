@@ -10,7 +10,17 @@ public sealed class InstallAnalysis
     public bool UninstallRecordingAttempted { get; set; }
     public bool UninstallResponseFileCreated { get; set; }
     public int? RecordedUninstallExitCode { get; set; }
+    public string? BaseSilentArguments { get; set; }
+    public string? AdditionalPackageArguments { get; set; }
+    public string? CombinedSilentArguments { get; set; }
+    public string? SilentInstallCommand { get; set; }
+    public string? SilentInstallStdOut { get; set; }
+    public string? SilentInstallStdErr { get; set; }
     public int? SilentReinstallExitCode { get; set; }
+    public bool SilentReinstallValidated { get; set; }
+    public bool DiscoverySucceeded { get; set; }
+    public string? DiscoveryMethod { get; set; }
+    public string? UninstallCandidate { get; set; }
     public int? SilentUninstallExitCode { get; set; }
     public bool? PostUninstallDetected { get; set; }
     public bool SilentUninstallValidated { get; set; }
