@@ -33,7 +33,7 @@ public sealed class UpdateService
     public async Task<UpdateInfo?> GetLatestAsync(CancellationToken cancellationToken = default)
     {
         using var response = await _http.GetAsync(LatestReleaseApi, cancellationToken);
-        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        if (response.StatusCode == HttpStatusCode.NotFound) return null; // repository has no published releases yet
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         var release = await JsonSerializer.DeserializeAsync<GitHubRelease>(stream, cancellationToken: cancellationToken)
@@ -71,6 +71,8 @@ public sealed class UpdateService
             await output.FlushAsync(cancellationToken);
         }
 
+        // The download stream must be closed before SHA-256 verification or the
+        // installer process can open the file on Windows.
         VerifyDigest(destination, asset.Digest);
         return destination;
     }

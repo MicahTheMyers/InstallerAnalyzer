@@ -270,7 +270,7 @@ public partial class MainWindow : Window
         page.Visibility = Visibility.Visible;
         foreach (var b in new[] { AnalyzeNavButton, SidebarSandboxButton, ImmyBotNavButton, SettingsNavButton, AboutNavButton }) b.Background = Brushes.Transparent;
         var active = ReferenceEquals(page, AnalyzePage) ? AnalyzeNavButton : ReferenceEquals(page, SandboxPage) ? SidebarSandboxButton : ReferenceEquals(page, ImmyBotPage) ? ImmyBotNavButton : ReferenceEquals(page, SettingsPage) ? SettingsNavButton : AboutNavButton;
-        active.Background = BrushFrom("#123967");
+        active.Background = (Brush)Resources["AccentSoft"];
     }
 
     private bool UseIntegratedViewer => EmbeddedModeRadio.IsChecked == true;
@@ -481,7 +481,7 @@ public partial class MainWindow : Window
         SandboxWindowEmbedder.BringToFront(_sandboxWindow);
     }
 
-    private sealed class AppSettings { public string SandboxDisplayMode { get; set; } = "Separate"; public bool AutomaticallyCheckForUpdates { get; set; } = true; }
+    private sealed class AppSettings { public string SandboxDisplayMode { get; set; } = "Separate"; public bool AutomaticallyCheckForUpdates { get; set; } = true; public string Theme { get; set; } = "Dark"; public string AccentColor { get; set; } = "Blue"; }
     private void LoadAppSettings()
     {
         try
@@ -490,6 +490,17 @@ public partial class MainWindow : Window
             if (string.Equals(settings?.SandboxDisplayMode, "Integrated", StringComparison.OrdinalIgnoreCase) || string.Equals(settings?.SandboxDisplayMode, "Embedded", StringComparison.OrdinalIgnoreCase)) EmbeddedModeRadio.IsChecked = true;
             else SeparateModeRadio.IsChecked = true;
             AutoUpdateToggle.IsChecked = settings?.AutomaticallyCheckForUpdates ?? true;
+            if (string.Equals(settings?.Theme, "Light", StringComparison.OrdinalIgnoreCase)) LightThemeRadio.IsChecked = true; else if (string.Equals(settings?.Theme, "SuperDark", StringComparison.OrdinalIgnoreCase)) SuperDarkThemeRadio.IsChecked = true; else if (string.Equals(settings?.Theme, "Purple", StringComparison.OrdinalIgnoreCase)) PurpleThemeRadio.IsChecked = true; else if (string.Equals(settings?.Theme, "Hacker", StringComparison.OrdinalIgnoreCase)) HackerThemeRadio.IsChecked = true; else DarkThemeRadio.IsChecked = true;
+            var accent = settings?.AccentColor ?? "Blue";
+            PurpleAccentRadio.IsChecked = accent.Equals("Purple", StringComparison.OrdinalIgnoreCase);
+            TealAccentRadio.IsChecked = accent.Equals("Teal", StringComparison.OrdinalIgnoreCase);
+            OrangeAccentRadio.IsChecked = accent.Equals("Orange", StringComparison.OrdinalIgnoreCase);
+            RedAccentRadio.IsChecked = accent.Equals("Red", StringComparison.OrdinalIgnoreCase);
+            GreenAccentRadio.IsChecked = accent.Equals("Green", StringComparison.OrdinalIgnoreCase);
+            PinkAccentRadio.IsChecked = accent.Equals("Pink", StringComparison.OrdinalIgnoreCase);
+            GoldAccentRadio.IsChecked = accent.Equals("Gold", StringComparison.OrdinalIgnoreCase);
+            BlueAccentRadio.IsChecked = !(PurpleAccentRadio.IsChecked == true || TealAccentRadio.IsChecked == true || OrangeAccentRadio.IsChecked == true || RedAccentRadio.IsChecked == true || GreenAccentRadio.IsChecked == true || PinkAccentRadio.IsChecked == true || GoldAccentRadio.IsChecked == true);
+            ApplyAppearance();
         }
         catch { SeparateModeRadio.IsChecked = true; }
         _settingsLoaded = true;
@@ -499,7 +510,7 @@ public partial class MainWindow : Window
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
-            File.WriteAllText(SettingsPath, JsonSerializer.Serialize(new AppSettings { SandboxDisplayMode = UseIntegratedViewer ? "Integrated" : "Separate", AutomaticallyCheckForUpdates = AutoUpdateToggle.IsChecked == true }, new JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(SettingsPath, JsonSerializer.Serialize(new AppSettings { SandboxDisplayMode = UseIntegratedViewer ? "Integrated" : "Separate", AutomaticallyCheckForUpdates = AutoUpdateToggle.IsChecked == true, Theme = LightThemeRadio.IsChecked == true ? "Light" : SuperDarkThemeRadio.IsChecked == true ? "SuperDark" : PurpleThemeRadio.IsChecked == true ? "Purple" : HackerThemeRadio.IsChecked == true ? "Hacker" : "Dark", AccentColor = PurpleAccentRadio.IsChecked == true ? "Purple" : TealAccentRadio.IsChecked == true ? "Teal" : OrangeAccentRadio.IsChecked == true ? "Orange" : RedAccentRadio.IsChecked == true ? "Red" : GreenAccentRadio.IsChecked == true ? "Green" : PinkAccentRadio.IsChecked == true ? "Pink" : GoldAccentRadio.IsChecked == true ? "Gold" : "Blue" }, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch { }
     }
@@ -522,6 +533,118 @@ public partial class MainWindow : Window
         try { Process.Start(new ProcessStartInfo { FileName = "OptionalFeatures.exe", UseShellExecute = true }); StatusText.Text = "Opened Windows Features"; }
         catch (Exception ex) { MessageBox.Show(ex.Message, "Windows Features", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
+
+
+    private void Appearance_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!_settingsLoaded) return;
+        ApplyAppearance();
+        SaveAppSettings();
+    }
+
+    private void ApplyAppearance()
+    {
+        var light = LightThemeRadio.IsChecked == true;
+        var superDarkTheme = SuperDarkThemeRadio.IsChecked == true;
+        var purpleTheme = PurpleThemeRadio.IsChecked == true;
+        var hackerTheme = HackerThemeRadio.IsChecked == true;
+
+        if (hackerTheme)
+        {
+            // Classic hacker theme: near-black surfaces with phosphor-green text throughout.
+            SetThemeBrush("Bg", "#020502");
+            SetThemeBrush("Sidebar", "#030803");
+            SetThemeBrush("Card", "#061006");
+            SetThemeBrush("Border", "#145C22");
+            SetThemeBrush("Text", "#39FF6A");
+            SetThemeBrush("Muted", "#20C94C");
+            SetThemeBrush("InputBg", "#010401");
+            SetThemeBrush("InputBorder", "#168A32");
+            SetThemeBrush("ButtonBg", "#071507");
+            SetThemeBrush("ButtonHover", "#0C2A10");
+            SetThemeBrush("CodeBg", "#000200");
+            SetThemeBrush("ScrollTrackBg", "#020702");
+            SetThemeBrush("ScrollThumb", "#158A32");
+            SetThemeBrush("ScrollThumbHover", "#39FF6A");
+        }
+        else if (superDarkTheme)
+        {
+            // Super Dark theme: true black/charcoal surfaces while retaining the normal accent system.
+            SetThemeBrush("Bg", "#000000");
+            SetThemeBrush("Sidebar", "#050505");
+            SetThemeBrush("Card", "#0A0A0A");
+            SetThemeBrush("Border", "#242424");
+            SetThemeBrush("Text", "#F5F5F5");
+            SetThemeBrush("Muted", "#A3A3A3");
+            SetThemeBrush("InputBg", "#050505");
+            SetThemeBrush("InputBorder", "#303030");
+            SetThemeBrush("ButtonBg", "#111111");
+            SetThemeBrush("ButtonHover", "#1C1C1C");
+            SetThemeBrush("CodeBg", "#000000");
+            SetThemeBrush("ScrollTrackBg", "#050505");
+            SetThemeBrush("ScrollThumb", "#525252");
+            SetThemeBrush("ScrollThumbHover", "#737373");
+        }
+        else if (purpleTheme)
+        {
+            // Full purple theme: deep violet surfaces with brighter purple hierarchy.
+            SetThemeBrush("Bg", "#120D1D");
+            SetThemeBrush("Sidebar", "#1A1029");
+            SetThemeBrush("Card", "#211532");
+            SetThemeBrush("Border", "#493463");
+            SetThemeBrush("Text", "#F8F4FF");
+            SetThemeBrush("Muted", "#C3B4D8");
+            SetThemeBrush("InputBg", "#180F27");
+            SetThemeBrush("InputBorder", "#5A4077");
+            SetThemeBrush("ButtonBg", "#2A1940");
+            SetThemeBrush("ButtonHover", "#3A2257");
+            SetThemeBrush("CodeBg", "#0F0918");
+            SetThemeBrush("ScrollTrackBg", "#160D22");
+            SetThemeBrush("ScrollThumb", "#76548F");
+            SetThemeBrush("ScrollThumbHover", "#A276C2");
+        }
+        else
+        {
+            SetThemeBrush("Bg", light ? "#F3F6FA" : "#08111F");
+            SetThemeBrush("Sidebar", light ? "#FFFFFF" : "#0B1626");
+            SetThemeBrush("Card", light ? "#FFFFFF" : "#101C2B");
+            SetThemeBrush("Border", light ? "#D5DDE8" : "#22354B");
+            SetThemeBrush("Text", light ? "#172033" : "#F4F7FB");
+            SetThemeBrush("Muted", light ? "#66758A" : "#A7B4C7");
+            SetThemeBrush("InputBg", light ? "#F8FAFC" : "#0B1625");
+            SetThemeBrush("InputBorder", light ? "#C8D2DF" : "#36506D");
+            SetThemeBrush("ButtonBg", light ? "#EDF2F7" : "#14243A");
+            SetThemeBrush("ButtonHover", light ? "#E1E8F0" : "#1A3150");
+            SetThemeBrush("CodeBg", light ? "#F7F9FC" : "#07111D");
+            SetThemeBrush("ScrollTrackBg", light ? "#E8EDF3" : "#09131F");
+            SetThemeBrush("ScrollThumb", light ? "#9AA9BA" : "#657C94");
+            SetThemeBrush("ScrollThumbHover", light ? "#73859A" : "#8EA3B8");
+        }
+
+        // Hacker mode intentionally overrides accent selection so the entire interface stays black + green.
+        var accent = hackerTheme ? "#00FF41"
+            : PurpleAccentRadio.IsChecked == true ? "#9B6DFF"
+            : TealAccentRadio.IsChecked == true ? "#14B8A6"
+            : OrangeAccentRadio.IsChecked == true ? "#F97316"
+            : RedAccentRadio.IsChecked == true ? "#EF4444"
+            : GreenAccentRadio.IsChecked == true ? "#22C55E"
+            : PinkAccentRadio.IsChecked == true ? "#EC4899"
+            : GoldAccentRadio.IsChecked == true ? "#EAB308"
+            : "#3B82F6";
+        var soft = hackerTheme ? "#0A3514"
+            : PurpleAccentRadio.IsChecked == true ? (light ? "#EDE9FE" : purpleTheme ? "#44256A" : "#30245A")
+            : TealAccentRadio.IsChecked == true ? (light ? "#CCFBF1" : purpleTheme ? "#173F3E" : "#123F3B")
+            : OrangeAccentRadio.IsChecked == true ? (light ? "#FFEDD5" : purpleTheme ? "#4A281E" : "#512A16")
+            : RedAccentRadio.IsChecked == true ? (light ? "#FEE2E2" : purpleTheme ? "#4B202F" : "#4A1D24")
+            : GreenAccentRadio.IsChecked == true ? (light ? "#DCFCE7" : purpleTheme ? "#183F31" : "#123B28")
+            : PinkAccentRadio.IsChecked == true ? (light ? "#FCE7F3" : purpleTheme ? "#4B2047" : "#4A1937")
+            : GoldAccentRadio.IsChecked == true ? (light ? "#FEF9C3" : purpleTheme ? "#44351E" : "#44370F")
+            : (light ? "#DBEAFE" : purpleTheme ? "#252D62" : "#123967");
+        SetThemeBrush("Accent", accent); SetThemeBrush("AccentSoft", soft); SetThemeBrush("Link", accent);
+        ShowPage(AnalyzePage.Visibility == Visibility.Visible ? AnalyzePage : SandboxPage.Visibility == Visibility.Visible ? SandboxPage : ImmyBotPage.Visibility == Visibility.Visible ? ImmyBotPage : SettingsPage.Visibility == Visibility.Visible ? SettingsPage : AboutPage);
+    }
+
+    private void SetThemeBrush(string key, string hex) => Resources[key] = BrushFrom(hex);
 
     private void AutoUpdateToggle_Changed(object sender, RoutedEventArgs e)
     {
@@ -602,7 +725,7 @@ public partial class MainWindow : Window
 
     private void SetHighlightedScript(RichTextBox target, string script)
     {
-        var doc = new FlowDocument { PagePadding = new Thickness(0), Background = new SolidColorBrush(Color.FromRgb(7, 17, 29)), FontFamily = new FontFamily("Cascadia Mono, Consolas"), FontSize = 13 };
+        var doc = new FlowDocument { PagePadding = new Thickness(0), Background = (Brush)Resources["CodeBg"], FontFamily = new FontFamily("Cascadia Mono, Consolas"), FontSize = 13 };
         var paragraph = new Paragraph { Margin = new Thickness(0), LineHeight = 19 };
         doc.Blocks.Add(paragraph);
 
@@ -610,7 +733,7 @@ public partial class MainWindow : Window
         int pos = 0;
         foreach (Match m in tokenPattern.Matches(script))
         {
-            if (m.Index > pos) paragraph.Inlines.Add(new Run(script.Substring(pos, m.Index - pos)) { Foreground = BrushFrom("#DCE7F5") });
+            if (m.Index > pos) paragraph.Inlines.Add(new Run(script.Substring(pos, m.Index - pos)) { Foreground = (Brush)Resources["Text"] });
             string color = m.Groups["comment"].Success ? "#6A9955" :
                            m.Groups["string"].Success ? "#FF8C5A" :
                            m.Groups["variable"].Success ? "#4FC1FF" :
@@ -619,7 +742,7 @@ public partial class MainWindow : Window
             paragraph.Inlines.Add(new Run(m.Value) { Foreground = BrushFrom(color), FontWeight = m.Groups["keyword"].Success ? FontWeights.SemiBold : FontWeights.Normal });
             pos = m.Index + m.Length;
         }
-        if (pos < script.Length) paragraph.Inlines.Add(new Run(script.Substring(pos)) { Foreground = BrushFrom("#DCE7F5") });
+        if (pos < script.Length) paragraph.Inlines.Add(new Run(script.Substring(pos)) { Foreground = (Brush)Resources["Text"] });
         target.Document = doc;
     }
 

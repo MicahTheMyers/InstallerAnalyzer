@@ -13,3 +13,7 @@ Run `BuildInstaller.bat` to build the self-contained application and Windows ins
 
 ## Update test
 Publish the generated `Release/InstallerAnalyzer-Setup.exe` as GitHub release tag `v0.9.4`. An installed v0.9.2 should then detect and install the update from About > Check for Updates.
+
+
+### v0.9.5 appearance update
+Adds Dark, Light, and full Purple themes plus independently selectable Blue, Purple, Teal, and Orange accents.
