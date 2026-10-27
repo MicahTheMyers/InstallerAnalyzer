@@ -1,8 +1,19 @@
+# .NET / Visual Studio build output
 bin/
 obj/
-Build/
-Release/
 .vs/
 *.user
 *.suo
-*.nupkg
+
+# Local release / publish output
+Release/
+publish/
+Installer/Output/
+
+# Temporary and diagnostic files
+*.iss.tmp
+*.log
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

@@ -3,7 +3,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
 echo ============================================
-echo   Installer Analyzer v0.10.9 Release Builder
+echo   Installer Analyzer v0.11.45 Release Builder
 echo ============================================
 echo.
 

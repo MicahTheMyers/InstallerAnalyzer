@@ -1,46 +1,34 @@
-# Installer Analyzer for ImmyBot v0.10.9
+# Installer Analyzer for ImmyBot v0.11.45
 
-Installer Analyzer analyzes Windows installers, validates install/uninstall workflows in Windows Sandbox, and generates ImmyBot deployment scripts and upload assets.
+Windows installer analysis and unattended deployment validation for ImmyBot.
 
-## v0.9.4
-- Increased application scrollbar width to 12 px.
-- Increased scrollbar thumb size for easier mouse targeting.
-- Improved thumb contrast for normal, hover, and drag states.
-- Retains all v0.9.2 installer analysis, Sandbox, ImmyBot, packaging, logo, and GitHub update functionality.
+## v0.11.45 stabilization
 
-## Build
-Run `BuildInstaller.bat` to build the self-contained application and Windows installer.
+- Removes optional Sandbox cleanup from the blocking analysis thread after v0.11.44 isolated the final hang to that path.
+- Marks the Sandbox lifecycle complete immediately after the authoritative result and completion flag are committed; host-side teardown remains responsible for closing the Sandbox.
+- Adds static Adobe Acrobat/Reader bootstrapper recognition so Adobe Download Manager launcher metadata is no longer presented as the deployed product identity.
+- Keeps Adobe silent arguments validation-only until Sandbox proves the working vendor strategy.
+- Renames the Analyze-page evidence label to **Installer evidence**.
 
-## Update test
-Publish the generated `Release/InstallerAnalyzer-Setup.exe` as GitHub release tag `v0.9.4`. An installed v0.9.2 should then detect and install the update from About > Check for Updates.
+## v0.11.44 finalization + heartbeat reliability
 
+The validated lifecycle result is now committed before optional final cleanup, so Sandbox-side cleanup can no longer strand the completion handoff. Heartbeat events append to a history instead of overwriting the file. The v0.11.43 session preflight and host recovery remain intact.
 
-### v0.10.9 Ensoft QSetup deployment intelligence
+## v0.11.44 host completion and timeline stability
 
-- Fixes NSIS uninstall candidates whose executable paths contain spaces.
-- Separates executable paths from command-line arguments before launching lifecycle commands.
-- Labels installer-family uninstall candidates separately from vendor-provided quiet uninstall commands.
-- Wraps Sandbox lifecycle errors and stage messages for readability.
+- Host-confirmed lifecycle success now completes the session immediately instead of waiting on Sandbox-side finalization.
+- Integrated Viewer state no longer overwrites analysis status.
+- Current Stage uses a persistent full lifecycle timeline driven by checkpoint facts.
 
+## v0.11.40 deterministic lifecycle state machine
 
-### v0.10.5 lifecycle reliability
+Candidate execution is now separated from evaluation, cleanup, detection, and progression. A candidate that displays UI, returns a non-success exit code, or fails detection is recorded as a validation result and the analyzer advances when the Sandbox baseline is safe. This prevents an unsupported bootstrapper from turning a completed analysis into a host timeout.
 
-- Adds detection-backed lifecycle validation, package-specific arguments, NSIS candidate uninstall validation, and Squirrel per-user discovery.
-- Exit code 0 alone is no longer treated as a validated silent reinstall.
+## v0.11.40 Adobe post-return diagnostics
 
-### v0.9.5 appearance update
-Adds Dark, Light, and full Purple themes plus independently selectable Blue, Purple, Teal, and Orange accents.
+This build focuses on the v0.11.35 boundary where the staged Adobe setup candidate returned exit code 2 but lifecycle processing stopped afterward. Post-return serialization, UI-state copying, detection, rejection recording, and candidate advancement now emit granular checkpoints and heartbeat activity. Non-zero candidate exits are recorded immediately rather than entering the full detection polling window.
 
+Adobe validation staging now copies the complete cached Acrobat Setup ProductCode directory rather than setup.exe alone, preserving adjacent vendor payload/context. The original Reader bootstrapper remains the deployment source unless a durable strategy is validated.
 
-### v0.10.5 intelligence and workflow update
-- Added local analysis history with reopen and clear controls.
-- Added detection-method ranking for MSI ProductCode, Windows Installer/uninstall registry, DisplayVersion, and install-location candidates.
-- Added a PowerShell Inspector that flags missing scripts, unsafe `$InstallerFolder` assumptions, response-file gaps, user-specific paths, and missing execution/exit handling.
-- Added an ImmyBot Deployment Intelligence panel that clearly separates static script checks from Sandbox lifecycle validation.
-- Preserved the stable v0.8.2+ Sandbox lifecycle and v0.9.5 theme/updater behavior.
-
-
-### v0.10.5 Squirrel.Windows support
-- Detects Squirrel.Windows installers with high-confidence framework fingerprints.
-- Suggests `--silent`, recognizes per-user `%LocalAppData%` deployment, and correctly reports that `.iss` response files are not required.
-- History now includes confidence and static-vs-Sandbox validation state.
+### v0.11.44
+Adds host-side stale Windows Sandbox session cleanup before launch to recover from the "too many sessions established" startup failure while retaining the v0.11.42 completion and timeline fixes.

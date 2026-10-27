@@ -8,7 +8,9 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Text.RegularExpressions;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Diagnostics;
+using System.Threading;
 using System.Windows.Threading;
 using InstallerAnalyzer.Models;
 using InstallerAnalyzer.Services;
@@ -35,6 +37,17 @@ public partial class MainWindow : Window
     private UninstallEntry? _selectedUninstallEntry;
     private ScriptView _scriptView = ScriptView.Install;
     private bool _analysisLoaded;
+    private DateTime? _sandboxCheckpointFirstSeen;
+    private DateTime? _sandboxLastActivityAt;
+    private DateTime? _sandboxLastActivityFileWrite;
+    private string? _liveWorkflowStage;
+    private DateTime? _liveWorkflowStageUpdatedAt;
+    private readonly List<string> _liveWorkflowStageHistory = new();
+    private string? _lastSandboxStageSignature;
+    private DateTime? _analysisResultFirstSeenAt;
+    private bool _hostValidatedCheckpointPromoted;
+    private static readonly TimeSpan SandboxOverallTimeout = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan SandboxInactivityTimeout = TimeSpan.FromMinutes(12);
     private readonly DispatcherTimer _sandboxWindowTimer = new() { Interval = TimeSpan.FromMilliseconds(600) };
     private IntPtr _sandboxWindow = IntPtr.Zero;
     private bool _integratedViewerActive;
@@ -59,7 +72,7 @@ public partial class MainWindow : Window
 
     private void Select_Click(object sender, RoutedEventArgs e)
     {
-        var d = new OpenFileDialog { Filter = "Installers (*.exe;*.msi)|*.exe;*.msi|All files (*.*)|*.*" };
+        var d = new OpenFileDialog { Filter = "Installers (*.exe;*.msi;*.msix;*.appx;*.msixbundle;*.appxbundle)|*.exe;*.msi;*.msix;*.appx;*.msixbundle;*.appxbundle|All files (*.*)|*.*" };
         if (d.ShowDialog() == true) Analyze(d.FileName);
     }
     private void Window_DragOver(object sender, System.Windows.DragEventArgs e) => e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
@@ -69,7 +82,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            _result = _detector.Analyze(path); _installerPath = path; _issSession = null; _installAnalysis = null; _selectedUninstallEntry = null; _analysisLoaded = false; _scriptView = ScriptView.Install; OpenIssButton.IsEnabled = false;
+            _result = _detector.Analyze(path); _installerPath = path; _issSession = null; _installAnalysis = null; _selectedUninstallEntry = null; _analysisLoaded = false; _liveWorkflowStage = null; _liveWorkflowStageUpdatedAt = null; _liveWorkflowStageHistory.Clear(); _lastSandboxStageSignature = null; _analysisResultFirstSeenAt = null; _hostValidatedCheckpointPromoted = false; _scriptView = ScriptView.Install; OpenIssButton.IsEnabled = false;
             _logoPath = ApplicationLogoService.ExtractPng(path);
             FileText.Text = path; KindBox.SelectedItem = _result.Kind; ConfidenceText.Text = $"{_result.Confidence}%"; ConfidenceBar.Value = _result.Confidence;
             StatusText.Text = $"Analyzed {Path.GetFileName(path)}"; ArchText.Text = _result.Architecture;
@@ -128,6 +141,31 @@ public partial class MainWindow : Window
         else IssStatusText.Text = "Local mode selected. Generating setup.iss will run the installer on this computer.";
     }
 
+    private static void EnsurePreviousSandboxSessionClosed()
+    {
+        // Windows Sandbox can leave a client/session process behind after a forced or host-side close.
+        // Starting another .wsb while that stale client is still connected can produce the
+        // "too many sessions established" error. Only clean up Windows Sandbox client processes;
+        // never touch Hyper-V services or unrelated virtualization processes.
+        var processNames = new[] { "WindowsSandboxClient", "WindowsSandbox", "WindowsSandboxRemoteSession" };
+        var found = false;
+        foreach (var processName in processNames)
+        {
+            foreach (var process in Process.GetProcessesByName(processName))
+            {
+                try
+                {
+                    found = true;
+                    if (!process.HasExited) process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
+                }
+                catch { }
+                finally { process.Dispose(); }
+            }
+        }
+        if (found) Thread.Sleep(2500);
+    }
+
     private void SandboxToggle_Changed(object sender, RoutedEventArgs e) { if (IsLoaded) UpdateSandboxControls(); }
 
     private void RecordIss_Click(object sender, RoutedEventArgs e)
@@ -137,18 +175,28 @@ public partial class MainWindow : Window
         {
             if (SandboxToggle.IsChecked == true)
             {
+                _analysisLoaded = false;
+                _sandboxCheckpointFirstSeen = null;
+                _sandboxLastActivityAt = DateTime.Now;
+                _sandboxLastActivityFileWrite = null;
+                _installAnalysis = null;
+                _selectedUninstallEntry = null;
                 if (!SandboxIssRecorder.IsSandboxAvailable())
                 {
                     var answer = MessageBox.Show("Windows Sandbox is not enabled. Open Windows Features now?", "Windows Sandbox", MessageBoxButton.YesNo, MessageBoxImage.Information);
                     if (answer == MessageBoxResult.Yes) OpenWindowsFeatures();
                     return;
                 }
+                EnsurePreviousSandboxSessionClosed();
                 _issSession = SandboxIssRecorder.Start(_installerPath, _result?.Kind ?? InstallerKind.Unknown, _result?.NeedsIss == true,
-                    ArgumentsBox.Text?.Trim() ?? string.Empty, AdditionalArgumentsBox.Text?.Trim() ?? string.Empty);
+                    ArgumentsBox.Text?.Trim() ?? string.Empty, AdditionalArgumentsBox.Text?.Trim() ?? string.Empty,
+                    BlockBundledMcAfeeToggle.IsChecked == true);
                 _sandboxWindow = IntPtr.Zero;
                 _integratedViewerActive = false;
                 _sandboxWindowTimer.Start();
                 BringSandboxFrontButton.IsEnabled = true;
+                StopSandboxButton.IsEnabled = true;
+                StartSandboxButton.IsEnabled = false;
                 SandboxOpenOutputButton.IsEnabled = true;
                 ShowPage(SandboxPage);
                 SandboxRunStatus.Text = "Starting Windows Sandbox…";
@@ -173,6 +221,101 @@ public partial class MainWindow : Window
     private void IssTimer_Tick(object? sender, EventArgs e)
     {
         if (_issSession is null) return;
+
+        // v0.11.41 host-side activity-aware hang protection. The generated analysis script
+        // writes a lightweight heartbeat while discovery/install/process monitoring is active.
+        // Twelve minutes with no heartbeat/checkpoint activity is considered stalled, while a
+        // 30-minute absolute ceiling remains as the final emergency guardrail.
+        if (!_analysisLoaded)
+        {
+            if (File.Exists(_issSession.CheckpointPath) && _sandboxCheckpointFirstSeen is null)
+                _sandboxCheckpointFirstSeen = DateTime.Now;
+
+            DateTime? newestWrite = null;
+            foreach (var activityPath in new[] { _issSession.HeartbeatPath, _issSession.CheckpointPath })
+            {
+                try
+                {
+                    if (!File.Exists(activityPath)) continue;
+                    var write = File.GetLastWriteTime(activityPath);
+                    if (newestWrite is null || write > newestWrite.Value) newestWrite = write;
+                }
+                catch { }
+            }
+            if (newestWrite is DateTime writeAt && (_sandboxLastActivityFileWrite is null || writeAt > _sandboxLastActivityFileWrite.Value))
+            {
+                _sandboxLastActivityFileWrite = writeAt;
+                _sandboxLastActivityAt = DateTime.Now;
+            }
+
+            // Live Current Stage: checkpoints are partial diagnostics, not completion.
+            // Read only the stage fields so the dashboard can update every timer tick without
+            // marking the analysis as loaded/completed.
+            try
+            {
+                if (File.Exists(_issSession.CheckpointPath))
+                {
+                    var checkpointRoot = JsonNode.Parse(File.ReadAllText(_issSession.CheckpointPath))?.AsObject();
+                    var stage = checkpointRoot?["WorkflowStage"]?.GetValue<string>();
+                    var updatedText = checkpointRoot?["WorkflowStageUpdatedAt"]?.GetValue<string>();
+                    if (!string.IsNullOrWhiteSpace(stage))
+                    {
+                        _liveWorkflowStage = stage;
+                        if (DateTime.TryParse(updatedText, out var stageAt)) _liveWorkflowStageUpdatedAt = stageAt;
+                        _liveWorkflowStageHistory.Clear();
+                        if (checkpointRoot?["WorkflowStageHistory"] is JsonArray history)
+                        {
+                            foreach (var item in history)
+                            {
+                                var historicalStage = item?["Stage"]?.GetValue<string>();
+                                if (!string.IsNullOrWhiteSpace(historicalStage) &&
+                                    (_liveWorkflowStageHistory.Count == 0 || _liveWorkflowStageHistory[^1] != historicalStage))
+                                    _liveWorkflowStageHistory.Add(historicalStage);
+                            }
+                        }
+                        // v0.11.41 host-side completion recovery. Keep the Sandbox payload identical
+                        // to the launch-stable v0.11.38 script. If lifecycle validation has already
+                        // proven reinstall + final uninstall + absence, promote that checkpoint on
+                        // the host instead of waiting for optional Sandbox finalization that may hang.
+                        var postUninstallDetected = checkpointRoot?["PostUninstallDetected"]?.GetValue<bool?>();
+                        var reinstallValidated = checkpointRoot?["SilentReinstallValidated"]?.GetValue<bool?>() == true;
+                        var finalUninstallExit = checkpointRoot?["SilentUninstallExitCode"]?.GetValue<int?>();
+                        if (!_hostValidatedCheckpointPromoted && reinstallValidated && finalUninstallExit is 0 or 3010 &&
+                            postUninstallDetected == false && stage.StartsWith("Final absence verification", StringComparison.OrdinalIgnoreCase))
+                        {
+                            checkpointRoot!["SilentUninstallValidated"] = true;
+                            checkpointRoot["ValidationError"] = null;
+                            checkpointRoot["WorkflowStage"] = "Deployment validation complete (host-confirmed)";
+                            checkpointRoot["WorkflowStageUpdatedAt"] = DateTime.Now.ToString("o");
+                            File.WriteAllText(_issSession.AnalysisPath, checkpointRoot.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                            _hostValidatedCheckpointPromoted = true;
+                            _analysisResultFirstSeenAt = DateTime.Now;
+                            _installAnalysis = JsonSerializer.Deserialize<InstallAnalysis>(checkpointRoot.ToJsonString(), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                            _selectedUninstallEntry = ChooseBestEntry(_installAnalysis?.NewUninstallEntries ?? new List<UninstallEntry>());
+                            _analysisLoaded = true;
+                            _liveWorkflowStage = "Deployment validation complete (host-confirmed)";
+                            try { File.WriteAllText(_issSession.CompleteFlagPath, "host-confirmed " + DateTime.Now.ToString("o")); } catch { }
+                        }
+                        SandboxRunStatus.Text = "Analysis running";
+                        SandboxRunDetails.Text = stage;
+                        UpdateSandboxDashboard();
+                    }
+                }
+            }
+            catch { }
+
+            var overallTimedOut = DateTime.Now - _issSession.StartedAt >= SandboxOverallTimeout;
+            var inactivityTimedOut = _sandboxLastActivityAt is DateTime lastActivity &&
+                                     DateTime.Now - lastActivity >= SandboxInactivityTimeout;
+            if (overallTimedOut || inactivityTimedOut)
+            {
+                FinalizeTimedOutSandboxRun(overallTimedOut
+                    ? "Sandbox analysis exceeded the 30-minute absolute safety limit."
+                    : "Sandbox analysis produced no heartbeat or checkpoint activity for 12 minutes.");
+                return;
+            }
+        }
+
         if (!_analysisLoaded && File.Exists(_issSession.AnalysisPath))
         {
             try
@@ -180,6 +323,7 @@ public partial class MainWindow : Window
                 _installAnalysis = JsonSerializer.Deserialize<InstallAnalysis>(File.ReadAllText(_issSession.AnalysisPath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                 _selectedUninstallEntry = ChooseBestEntry(_installAnalysis?.NewUninstallEntries ?? new List<UninstallEntry>());
                 _analysisLoaded = true;
+                _analysisResultFirstSeenAt ??= DateTime.Now;
                 UpdateSandboxDashboard();
                 if (_selectedUninstallEntry is not null)
                 {
@@ -199,8 +343,33 @@ public partial class MainWindow : Window
         }
         if (requiresIss && !File.Exists(_issSession.IssPath)) return;
 
+        if (!_hostValidatedCheckpointPromoted && !File.Exists(_issSession.CompleteFlagPath))
+        {
+            SandboxRunStatus.Text = "Finalizing analysis";
+            SandboxRunDetails.Text = _liveWorkflowStage ?? "Validated result captured; waiting for completion handoff.";
+            UpdateSandboxDashboard();
+            if (_analysisResultFirstSeenAt is not DateTime resultSeen || DateTime.Now - resultSeen < TimeSpan.FromMinutes(2))
+                return;
+
+            // The validated result is already safely on the host. Optional Sandbox cleanup must
+            // never strand the UI indefinitely. After two minutes, accept the committed result
+            // and close the Sandbox while preserving any bundled-software verification state.
+            try { File.WriteAllText(_issSession.CompleteFlagPath, "host-finalization-fallback " + DateTime.Now.ToString("o")); } catch { }
+            SandboxRunDetails.Text = "Validated analysis captured. Optional Sandbox finalization exceeded two minutes; host completed the handoff safely.";
+        }
+
         _issTimer.Stop(); UpdateSandboxDashboard(); SandboxRunStatus.Text = "Analysis complete";
         SandboxRunDetails.Text = _selectedUninstallEntry is null ? "Sandbox completed. No primary application was identified." : $"Detected {_selectedUninstallEntry.DisplayName} {_selectedUninstallEntry.DisplayVersion}. Installation analysis captured.";
+        StopSandboxButton.IsEnabled = false;
+        StartSandboxButton.IsEnabled = _installerPath is not null;
+        if (AutoCloseSandboxToggle.IsChecked == true)
+        {
+            SandboxWindowEmbedder.ForceCloseSandboxWindow(_sandboxWindow);
+            _sandboxWindowTimer.Stop();
+            BringSandboxFrontButton.IsEnabled = false;
+            _sandboxWindow = IntPtr.Zero;
+            SandboxRunDetails.Text += " Windows Sandbox closed automatically after output capture.";
+        }
         if (requiresIss)
         {
             IssCheck.IsChecked = true; IssStatusText.Text = $"setup.iss created: {_issSession.IssPath}"; ArgumentsBox.Text = "/s /f1`\"$ResponseFile`\"";
@@ -213,7 +382,59 @@ public partial class MainWindow : Window
         }
         _scriptView = ScriptView.Install; Generate();
         var details = _selectedUninstallEntry is null ? "No new uninstall registry entry was identified." : $"Detected: {_selectedUninstallEntry.DisplayName} {_selectedUninstallEntry.DisplayVersion}\n\nDetection, Uninstall, and Validation results are now available.";
-        MessageBox.Show("Sandbox analysis completed.\n\n" + details, "Installation analysis complete", MessageBoxButton.OK, MessageBoxImage.Information);
+        // Completion is reflected in the dashboard; avoid a routine informational modal.
+        _ = details;
+    }
+
+    private void FinalizeTimedOutSandboxRun(string reason)
+    {
+        if (_issSession is null) return;
+        try
+        {
+            var source = File.Exists(_issSession.CheckpointPath) ? _issSession.CheckpointPath : null;
+            JsonObject root;
+            if (source is not null)
+                root = JsonNode.Parse(File.ReadAllText(source))?.AsObject() ?? new JsonObject();
+            else
+                root = new JsonObject
+                {
+                    ["Installer"] = _installerPath is null ? null : Path.GetFileName(_installerPath),
+                    ["DiscoverySucceeded"] = false,
+                    ["NewUninstallEntries"] = new JsonArray()
+                };
+
+            root["CapturedAt"] = DateTime.Now.ToString("o");
+            root["ValidationError"] = reason;
+            var lastStage = root["WorkflowStage"]?.GetValue<string>();
+            root["TimedOutStage"] = !string.IsNullOrWhiteSpace(lastStage)
+                ? lastStage
+                : (_sandboxCheckpointFirstSeen is null ? "Initial analysis / discovery" : "Lifecycle validation");
+            root["WorkflowStage"] = "Timed out by host safety watchdog";
+            root["HostTimeout"] = true;
+            File.WriteAllText(_issSession.AnalysisPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+
+            // v0.11.41: immediately hydrate the promoted checkpoint so timeout UI still shows
+            // the discovered primary application, dependencies, commands, and partial confidence.
+            _installAnalysis = JsonSerializer.Deserialize<InstallAnalysis>(root.ToJsonString(), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            _selectedUninstallEntry = ChooseBestEntry(_installAnalysis?.NewUninstallEntries ?? new List<UninstallEntry>());
+            _analysisLoaded = _installAnalysis is not null;
+        }
+        catch
+        {
+            // Even if diagnostic promotion fails, never leave an unattended Sandbox hung.
+        }
+
+        SandboxWindowEmbedder.ForceCloseSandboxWindow(_sandboxWindow);
+        _sandboxWindowTimer.Stop();
+        BringSandboxFrontButton.IsEnabled = false;
+        StopSandboxButton.IsEnabled = false;
+        StartSandboxButton.IsEnabled = _installerPath is not null;
+        _sandboxWindow = IntPtr.Zero;
+        SandboxRunStatus.Text = "Analysis timed out";
+        SandboxRunDetails.Text = reason + " Partial diagnostics were preserved when available.";
+        StatusText.Text = "Sandbox analysis timed out — diagnostics preserved";
+        // Leave the normal timer running for one more tick so the promoted final JSON
+        // is loaded through the exact same result path as a normal completed analysis.
     }
 
     private UninstallEntry? ChooseBestEntry(List<UninstallEntry> entries)
@@ -368,43 +589,71 @@ public partial class MainWindow : Window
     {
         if (SandboxStageList is null) return;
         var stages = new List<string>();
-        if (_issSession is null)
+        var stage = _liveWorkflowStage ?? string.Empty;
+        var lowerStage = stage.ToLowerInvariant();
+        var hasSession = _issSession is not null;
+        var hasPrimary = _selectedUninstallEntry is not null || (_installAnalysis?.NewUninstallEntries?.Count ?? 0) > 0;
+        var hasCandidates = (_installAnalysis?.SilentStrategyCandidates?.Count ?? 0) > 0 || lowerStage.Contains("candidate");
+        var reinstallValidated = _installAnalysis?.SilentReinstallValidated == true;
+        var finalUninstallSucceeded = _installAnalysis?.SilentUninstallExitCode is 0 or 3010;
+        var finalAbsent = _installAnalysis?.PostUninstallDetected == false && finalUninstallSucceeded;
+        var completed = _analysisLoaded && (_hostValidatedCheckpointPromoted || (_issSession is not null && File.Exists(_issSession.CompleteFlagPath)));
+
+        int current = 0;
+        if (hasSession) current = 1;
+        if (lowerStage.Contains("discover") || lowerStage.Contains("initial install") || hasPrimary) current = 2;
+        if (hasPrimary) current = 3;
+        if (lowerStage.Contains("uninstall candidate") || lowerStage.Contains("silent uninstall") || hasCandidates) current = 4;
+        if (lowerStage.Contains("initial silent uninstall") || lowerStage.Contains("initial absence") || hasCandidates) current = 5;
+        if (hasCandidates || lowerStage.Contains("reinstall") || reinstallValidated) current = 6;
+        if (reinstallValidated && (lowerStage.Contains("final") || finalUninstallSucceeded)) current = 7;
+        if (finalUninstallSucceeded && (lowerStage.Contains("absence") || finalAbsent)) current = 8;
+        if (finalAbsent || lowerStage.Contains("finaliz") || lowerStage.Contains("deployment validation complete")) current = 9;
+        if (completed) current = 10;
+
+        string Mark(int index, string label)
         {
-            stages.Add("○ Waiting for Sandbox session");
+            if (completed || index < current) return $"✓ {label}";
+            if (index == current && hasSession) return $"◉ NOW: {label}";
+            return $"○ {label}";
         }
-        else
+
+        stages.Add(Mark(1, "Sandbox session"));
+        stages.Add(Mark(2, "Initial installation / discovery"));
+        stages.Add(Mark(3, "Identify primary application"));
+        stages.Add(Mark(4, "Build silent uninstall strategy"));
+        stages.Add(Mark(5, "Validate initial uninstall"));
+        stages.Add(Mark(6, "Test silent reinstall candidates"));
+        stages.Add(Mark(7, "Validate final uninstall"));
+        stages.Add(Mark(8, "Verify final removal"));
+        stages.Add(Mark(9, "Generate final analysis"));
+        stages.Add(Mark(10, "Analysis complete"));
+
+        if (hasSession && !string.IsNullOrWhiteSpace(stage) && !completed)
+            stages.Add($"   ↳ {stage}");
+
+        if (_installAnalysis?.SilentStrategyAttempts is { Count: > 0 } attempts)
         {
-            stages.Add("✓ Sandbox session started");
-            stages.Add(_issSession.RequiresIss ? (File.Exists(_issSession.IssPath) ? "✓ setup.iss captured" : "◉ Installing / recording setup.iss") : "✓ Response file not required");
-            stages.Add(_analysisLoaded ? "✓ Installation analysis captured" : "○ Waiting for registry analysis");
-            if (_installAnalysis is not null)
+            for (var i = 0; i < attempts.Count; i++)
             {
-                stages.Add(_selectedUninstallEntry is not null ? $"✓ Primary app: {_selectedUninstallEntry.DisplayName} {_selectedUninstallEntry.DisplayVersion}".Trim() : "! Primary application not identified");
-                if (_issSession.RequiresIss)
-                    stages.Add(_installAnalysis.UninstallResponseFileCreated ? "✓ uninstall.iss captured" : "○ Waiting for uninstall recording");
-                else if (!string.IsNullOrWhiteSpace(_selectedUninstallEntry?.QuietUninstallString))
-                    stages.Add("✓ Silent uninstall method captured");
-                else if (!string.IsNullOrWhiteSpace(_installAnalysis.UninstallCandidate))
-                    stages.Add(_installAnalysis.SilentUninstallValidated
-                        ? $"✓ Silent uninstall validated: {_installAnalysis.UninstallValidationMethod}"
-                        : $"◉ Silent uninstall candidate: {_installAnalysis.UninstallValidationMethod}");
-                else
-                    stages.Add("! No silent uninstall method available");
-                if (!string.IsNullOrWhiteSpace(_installAnalysis.SilentInstallCommand)) stages.Add($"Command: {_installAnalysis.SilentInstallCommand}");
-                stages.Add(_installAnalysis.SilentReinstallValidated ? "✓ Silent reinstall validated" : _installAnalysis.SilentReinstallExitCode is null ? "○ Silent reinstall not attempted" : $"✗ Silent reinstall failed validation (exit {_installAnalysis.SilentReinstallExitCode})");
-                stages.Add(_installAnalysis.SilentUninstallValidated ? "✓ Silent uninstall validated" : _installAnalysis.SilentReinstallValidated ? "○ Silent uninstall validation pending" : "○ Silent uninstall not attempted");
-                stages.Add(_installAnalysis.PostUninstallDetected == false ? "✓ Post-uninstall detection passed" : _installAnalysis.SilentUninstallValidated ? "✓ Removal verified" : "○ Removal verification not completed");
-                if (!string.IsNullOrWhiteSpace(_installAnalysis.ValidationError)) stages.Add($"! {_installAnalysis.ValidationError}");
+                var attempt = attempts[i];
+                var marker = string.Equals(attempt.Outcome, "Validated", StringComparison.OrdinalIgnoreCase) ? "✓" : "✗";
+                stages.Add($"   {marker} Candidate {i + 1}/{attempts.Count}: {attempt.Name} — {attempt.Outcome}");
             }
         }
-        SandboxStageList.ItemsSource = stages;
+        var stageSignature = string.Join("\n", stages);
+        if (!string.Equals(_lastSandboxStageSignature, stageSignature, StringComparison.Ordinal))
+        {
+            _lastSandboxStageSignature = stageSignature;
+            SandboxStageList.ItemsSource = stages;
+        }
 
         var files = new List<string>();
         if (_issSession is not null)
         {
             if (_issSession.RequiresIss)
             {
-                foreach (var name in new[] { "setup.iss", "uninstall.iss", "install-analysis.json" })
+                foreach (var name in new[] { "setup.iss", "uninstall.iss", "install-analysis.json", "analysis-debug.jsonl" })
                 {
                     var fp = Path.Combine(_issSession.OutputFolder, name);
                     files.Add((File.Exists(fp) ? "✓ " : "○ ") + name);
@@ -415,6 +664,8 @@ public partial class MainWindow : Window
                 files.Add("✓ Response files not required");
                 var analysis = Path.Combine(_issSession.OutputFolder, "install-analysis.json");
                 files.Add((File.Exists(analysis) ? "✓ " : "○ ") + "install-analysis.json");
+                var debug = Path.Combine(_issSession.OutputFolder, "analysis-debug.jsonl");
+                files.Add((File.Exists(debug) ? "✓ " : "○ ") + "analysis-debug.jsonl");
             }
         }
         SandboxFilesList.ItemsSource = files;
@@ -432,9 +683,12 @@ public partial class MainWindow : Window
                 .Select(x => $"{x.DisplayName} {x.DisplayVersion}".Trim()).ToList();
         }
 
-        var ready = _installerPath is not null && _result is not null && _selectedUninstallEntry is not null && _installAnalysis?.SilentUninstallValidated == true;
-        DeploymentReadinessText.Text = ready ? "READY FOR IMMYBOT" : "Sandbox validation required";
-        DeploymentReadinessText.Foreground = BrushFrom(ready ? "#35D07F" : "#E7B75D");
+        var confidence = DeploymentConfidenceService.Calculate(_result, _installAnalysis, _selectedUninstallEntry);
+        var ready = _installerPath is not null && confidence.Score == 100;
+        DeploymentReadinessText.Text = confidence.Status;
+        DeploymentConfidenceText.Text = $"Deployment Confidence: {confidence.Score}%";
+        DeploymentConfidenceList.ItemsSource = confidence.Checks;
+        DeploymentReadinessText.Foreground = BrushFrom(ready ? "#35D07F" : confidence.Score >= 75 ? "#E7B75D" : "#E58B8B");
         ExportImmyBotButton.IsEnabled = ready;
         if (ImmyExportButton is not null) ImmyExportButton.IsEnabled = ready;
         UpdateImmyBotPage();
@@ -563,6 +817,11 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(text)) Clipboard.SetText(text);
     }
 
+    private void AppSetting_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_settingsLoaded) SaveAppSettings();
+    }
+
     private void SandboxDisplayMode_Changed(object sender, RoutedEventArgs e)
     {
         if (!_settingsLoaded) return;
@@ -592,8 +851,15 @@ public partial class MainWindow : Window
         {
             _integratedViewerActive = false;
             SandboxPreviewImage.Source = null;
-            SandboxRunStatus.Text = "Windows Sandbox running";
-            SandboxRunDetails.Text = "Sandbox is running in a separate window. Complete the installer normally.";
+            if (_analysisLoaded)
+            {
+                SandboxRunStatus.Text = "Analysis complete";
+            }
+            else if (string.IsNullOrWhiteSpace(_liveWorkflowStage))
+            {
+                SandboxRunStatus.Text = "Analysis running";
+                SandboxRunDetails.Text = "Windows Sandbox is running in a separate window.";
+            }
             UpdateSandboxPage();
             _sandboxWindowTimer.Stop();
             return;
@@ -604,8 +870,7 @@ public partial class MainWindow : Window
         {
             SandboxPreviewImage.Source = preview;
             _integratedViewerActive = true;
-            SandboxRunStatus.Text = "Integrated Sandbox viewer active";
-            SandboxRunDetails.Text = "Showing a live preview of Windows Sandbox. Click Bring to Front when direct mouse or keyboard interaction is needed.";
+            // Viewer state is presentation-only. Do not overwrite the authoritative analysis status.
             SandboxPlaceholderText.Visibility = Visibility.Collapsed;
             SandboxPreviewImage.Visibility = Visibility.Visible;
         }
@@ -618,13 +883,67 @@ public partial class MainWindow : Window
         }
     }
 
+    private void StopSandbox_Click(object sender, RoutedEventArgs e)
+    {
+        if (_issSession is null) return;
+        try
+        {
+            if (!File.Exists(_issSession.AnalysisPath))
+            {
+                var diagnostic = new
+                {
+                    Installer = _installerPath is null ? null : Path.GetFileName(_installerPath),
+                    InstallerExitCode = -3,
+                    CapturedAt = DateTimeOffset.Now,
+                    NewUninstallEntries = Array.Empty<object>(),
+                    PrimaryKey = (string?)null,
+                    UninstallValidationMethod = "Stopped by user",
+                    UninstallRecordingAttempted = false,
+                    UninstallResponseFileCreated = false,
+                    RecordedUninstallExitCode = (int?)null,
+                    BaseSilentArguments = ArgumentsBox.Text?.Trim() ?? string.Empty,
+                    AdditionalPackageArguments = AdditionalArgumentsBox.Text?.Trim() ?? string.Empty,
+                    CombinedSilentArguments = EffectiveSilentArguments(),
+                    SilentInstallCommand = (string?)null,
+                    SilentInstallStdOut = (string?)null,
+                    SilentInstallStdErr = (string?)null,
+                    SilentReinstallExitCode = (int?)null,
+                    SilentReinstallValidated = false,
+                    SilentUninstallExitCode = (int?)null,
+                    PostUninstallDetected = (bool?)null,
+                    SilentUninstallValidated = false,
+                    DiscoverySucceeded = false,
+                    DiscoveryMethod = (string?)null,
+                    UninstallCandidate = (string?)null,
+                    ValidationError = "Analysis stopped by user before Sandbox validation completed.",
+                    BootstrapperProcesses = Array.Empty<string>(),
+                    DiscoveredInstallerFiles = Array.Empty<string>()
+                };
+                File.WriteAllText(_issSession.AnalysisPath, JsonSerializer.Serialize(diagnostic, new JsonSerializerOptions { WriteIndented = true }));
+            }
+        }
+        catch { }
+
+        SandboxWindowEmbedder.ForceCloseSandboxWindow(_sandboxWindow);
+        _sandboxWindowTimer.Stop();
+        _issTimer.Stop();
+        _sandboxWindow = IntPtr.Zero;
+        BringSandboxFrontButton.IsEnabled = false;
+        StopSandboxButton.IsEnabled = false;
+        StartSandboxButton.IsEnabled = _installerPath is not null;
+        SandboxRunStatus.Text = "Analysis stopped";
+        SandboxRunDetails.Text = "Analysis stopped by user. Any diagnostic output captured before shutdown remains in the output folder.";
+        StatusText.Text = "Sandbox analysis stopped by user";
+        UpdateSandboxDashboard();
+    }
+
     private void BringSandboxFront_Click(object sender, RoutedEventArgs e)
     {
         if (_sandboxWindow == IntPtr.Zero) _sandboxWindow = SandboxWindowEmbedder.FindSandboxWindow();
         SandboxWindowEmbedder.BringToFront(_sandboxWindow);
     }
 
-    private sealed class AppSettings { public string SandboxDisplayMode { get; set; } = "Separate"; public bool AutomaticallyCheckForUpdates { get; set; } = true; public string Theme { get; set; } = "Dark"; public string AccentColor { get; set; } = "Blue"; }
+    private sealed class AppSettings { public string SandboxDisplayMode { get; set; } = "Separate"; public bool AutoCloseSandbox { get; set; } = true; public bool AutomaticallyCheckForUpdates { get; set; } = true; public bool BlockBundledMcAfee { get; set; } = true; public string Theme { get; set; } = "Dark"; public string AccentColor { get; set; } = "Blue"; }
     private void LoadAppSettings()
     {
         try
@@ -632,7 +951,9 @@ public partial class MainWindow : Window
             var settings = File.Exists(SettingsPath) ? JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) : null;
             if (string.Equals(settings?.SandboxDisplayMode, "Integrated", StringComparison.OrdinalIgnoreCase) || string.Equals(settings?.SandboxDisplayMode, "Embedded", StringComparison.OrdinalIgnoreCase)) EmbeddedModeRadio.IsChecked = true;
             else SeparateModeRadio.IsChecked = true;
+            AutoCloseSandboxToggle.IsChecked = settings?.AutoCloseSandbox ?? true;
             AutoUpdateToggle.IsChecked = settings?.AutomaticallyCheckForUpdates ?? true;
+            BlockBundledMcAfeeToggle.IsChecked = settings?.BlockBundledMcAfee ?? true;
             if (string.Equals(settings?.Theme, "Light", StringComparison.OrdinalIgnoreCase)) LightThemeRadio.IsChecked = true; else if (string.Equals(settings?.Theme, "SuperDark", StringComparison.OrdinalIgnoreCase)) SuperDarkThemeRadio.IsChecked = true; else if (string.Equals(settings?.Theme, "Purple", StringComparison.OrdinalIgnoreCase)) PurpleThemeRadio.IsChecked = true; else if (string.Equals(settings?.Theme, "Hacker", StringComparison.OrdinalIgnoreCase)) HackerThemeRadio.IsChecked = true; else DarkThemeRadio.IsChecked = true;
             var accent = settings?.AccentColor ?? "Blue";
             PurpleAccentRadio.IsChecked = accent.Equals("Purple", StringComparison.OrdinalIgnoreCase);
@@ -653,7 +974,7 @@ public partial class MainWindow : Window
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
-            File.WriteAllText(SettingsPath, JsonSerializer.Serialize(new AppSettings { SandboxDisplayMode = UseIntegratedViewer ? "Integrated" : "Separate", AutomaticallyCheckForUpdates = AutoUpdateToggle.IsChecked == true, Theme = LightThemeRadio.IsChecked == true ? "Light" : SuperDarkThemeRadio.IsChecked == true ? "SuperDark" : PurpleThemeRadio.IsChecked == true ? "Purple" : HackerThemeRadio.IsChecked == true ? "Hacker" : "Dark", AccentColor = PurpleAccentRadio.IsChecked == true ? "Purple" : TealAccentRadio.IsChecked == true ? "Teal" : OrangeAccentRadio.IsChecked == true ? "Orange" : RedAccentRadio.IsChecked == true ? "Red" : GreenAccentRadio.IsChecked == true ? "Green" : PinkAccentRadio.IsChecked == true ? "Pink" : GoldAccentRadio.IsChecked == true ? "Gold" : "Blue" }, new JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(SettingsPath, JsonSerializer.Serialize(new AppSettings { SandboxDisplayMode = UseIntegratedViewer ? "Integrated" : "Separate", AutoCloseSandbox = AutoCloseSandboxToggle.IsChecked == true, AutomaticallyCheckForUpdates = AutoUpdateToggle.IsChecked == true, BlockBundledMcAfee = BlockBundledMcAfeeToggle.IsChecked == true, Theme = LightThemeRadio.IsChecked == true ? "Light" : SuperDarkThemeRadio.IsChecked == true ? "SuperDark" : PurpleThemeRadio.IsChecked == true ? "Purple" : HackerThemeRadio.IsChecked == true ? "Hacker" : "Dark", AccentColor = PurpleAccentRadio.IsChecked == true ? "Purple" : TealAccentRadio.IsChecked == true ? "Teal" : OrangeAccentRadio.IsChecked == true ? "Orange" : RedAccentRadio.IsChecked == true ? "Red" : GreenAccentRadio.IsChecked == true ? "Green" : PinkAccentRadio.IsChecked == true ? "Pink" : GoldAccentRadio.IsChecked == true ? "Gold" : "Blue" }, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch { }
     }
