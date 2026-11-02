@@ -1,0 +1,209 @@
+PASS No requirement means no runtime/servicing queries
+PASS Failure explained: restricted
+PASS Host context never serviced
+PASS Single verified provisioning attempt
+PASS Repeated requests do not reinstall verified runtime
+PASS Online command cannot reboot and uses Windows Update default
+PASS Optional guest source uses DISM offline mode
+PASS Failure explained: No installer retry
+PASS Failed/timed-out command is not provisioned: 12006
+PASS Failure explained: No installer retry
+PASS Failure never loops servicing
+PASS Failure explained: No installer retry
+PASS Failed/timed-out command is not provisioned: 14098
+PASS Failure explained: No installer retry
+PASS Failure never loops servicing
+PASS Failure explained: No installer retry
+PASS Failed/timed-out command is not provisioned: -2
+PASS Failure explained: No installer retry
+PASS Failure never loops servicing
+PASS Failure explained: REBOOT REQUIRED
+PASS 3010 stops installer until guest reboot
+PASS Failure explained: REBOOT REQUIRED
+PASS Pending feature is not reprovisioned
+PASS Failure explained: not both verified
+PASS Exit zero alone is not success
+PASS Failure explained: not both verified
+PASS Runtime probe failure prevents installer continuation
+PASS Existing runtime verified without servicing
+PASS Failure explained: feature state
+PASS Unknown feature state never triggers blind install
+PASS Failure explained: standalone installer
+PASS Standalone-only builds never use NetFx3 DISM
+PASS No unrelated provisioning trigger: missing DLL
+PASS No unrelated provisioning trigger: .NET Framework 4.8 is required
+PASS No unrelated provisioning trigger: .NET Framework 3.5 is optional
+PASS No unrelated provisioning trigger: .NET Framework 3.5 is not required
+PASS One installer retry after verified provisioning
+PASS Failed provisioning does not retry installer
+PASS Preserve non-placeholder update source: https://real-wsus.example:8531
+PASS Preserve non-placeholder update source: http://127.0.0.1:80
+PASS Preserve non-placeholder update source: other-server:80
+PASS Repair exact Sandbox placeholder once using guest update service
+PASS Already unselected placeholder needs no policy mutation
+PASS Invalid source manifest rejected before guest policy changes
+PASS Component traversal rejected before source reads or policy changes
+RESULT: 45 passed, 0 failed
+PASS Windows PowerShell syntax: Generated-Bootstrapper.ps1
+PASS Windows PowerShell syntax: Generated-InnoSetup.ps1
+PASS Windows PowerShell syntax: Generated-InstallShield-Recorder.ps1
+PASS Windows PowerShell syntax: Generated-InstallShield.ps1
+PASS Windows PowerShell syntax: Generated-Msi.ps1
+PASS Windows PowerShell syntax: Generated-Msix.ps1
+PASS Windows PowerShell syntax: Generated-Nsis.ps1
+PASS Windows PowerShell syntax: Generated-NvidiaSfx.ps1
+PASS Windows PowerShell syntax: Generated-QSetup.ps1
+PASS Windows PowerShell syntax: Generated-RSPile-Recorder.ps1
+PASS Windows PowerShell syntax: Generated-Squirrel.ps1
+PASS Windows PowerShell syntax: Generated-Unknown.ps1
+PASS Windows PowerShell syntax: Generated-WixBurn.ps1
+PASS MSI, registry and version detection candidates generated
+PASS MSI ProductCode ranks first with measured absent baseline
+PASS Still-present registry identity does not claim removal
+PASS Removed registry identities record absent detection
+PASS Preexisting identity cannot become a fresh detection proof
+PASS MSIX detection uses exact package identity rather than filename
+PASS A different installed MSIX version does not fabricate presence
+PASS Unmeasured filesystem baseline stays unknown
+PASS Service, driver and scheduled task deltas captured
+PASS Removal verifies component absence
+PASS Failed driver query preserves unknown absence state
+PASS A truncated component inventory cannot establish complete service absence
+PASS Process evidence excludes untracked and preexisting process identities
+PASS Network observations are limited to new installer-tree processes
+PASS Connections are not misreported as proven downloads
+PASS Repeated process/network observations are bounded and deduplicated
+PASS PID reuse does not attribute a later unrelated process or its network connections to the installer
+PASS Final evidence is marked complete before the host-recoverable checkpoint is published
+PASS MSI registry probe observes the requested registry view without collecting the value
+PASS Missing, formatted and file-locator registry probes retain distinct evidence states
+PASS Prerequisite probes do not collect raw registry contents
+PASS An absent parent directory establishes a new executable baseline
+PASS An existing parent does not establish whether a particular executable existed
+PASS An incomplete directory enumeration cannot fabricate absence
+PASS Paths outside measured roots retain an unknown baseline
+PASS Native MSI unknown-product state proves absence in the queried context
+PASS Native MSI installed state proves presence
+PASS Other-user or unavailable MSI state cannot prove absence
+PASS Other-user or unavailable MSI state cannot prove absence
+PASS Known MSI property values are resolved as data
+PASS Unresolved MSI formatting is preserved for explicit unknown handling
+PASS Runtime availability never establishes a prerequisite requirement
+PASS Changed pending file operations flag reboot without collecting their private paths
+PASS Unchanged preexisting pending file operations do not become new installer reboot evidence
+RESULT: 47 passed, 0 failed
+PASS Exact file is observed without execution
+PASS Known size mismatch retains presence
+PASS Invalid size is unknown
+PASS Unsupported MSI version semantics remain unknown
+PASS Missing literal file is observed absent
+PASS Directory search retains its kind
+PASS Recursive search is not guessed
+PASS Unresolved MSI property is unknown
+PASS UNC search is rejected without network access
+PASS Implicit fixed-drive search is unknown
+PASS Locator cycle is bounded
+PASS Unsupported parent source is unknown
+PASS Filename traversal is rejected
+PASS Declared long filename is observed literally
+PASS Explicit directory parent chain resolves
+PASS Ambiguous locator remains unknown
+PASS Existing file behind a reparse directory is not followed
+PASS Missing child behind a reparse directory is not declared absent
+PASS Access failure remains unknown
+RESULT: 19 file probe checks passed; only inert fixture files were created
+PASS Service helper parses in Windows PowerShell 5.1
+PASS Declared exact service is measured even when stopped
+PASS Service availability is linked to declaration without fabricating an MSI property value
+PASS Explicit SCM not-found response establishes service absence
+PASS Denied service query does not establish absence
+PASS Unsupported service target is not queried: SYSTEM\CurrentControlSet\Services\*
+PASS Unsupported service target is not queried: SYSTEM\CurrentControlSet\Services\[FORMATTED]
+PASS Unsupported service target is not queried: SYSTEM\ControlSet001\Services\FixtureSvc
+PASS Unsupported service target is not queried: \\remote\SYSTEM\CurrentControlSet\Services\FixtureSvc
+PASS Unsupported service target is not queried: SYSTEM\CurrentControlSet\Services\Fixture?
+PASS Per-user registry declaration does not become a machine service probe
+PASS Duplicate service/property declarations are deduplicated
+PASS Service query count is bounded
+RESULT: 13 service checks passed; SCM reads mocked, no service changed
+PASS Staged directory DLL bytes are observed without loading the image
+PASS Absent literal DLL is not a complete loader diagnosis
+PASS API-set names are contracts rather than missing files
+PASS Traversal cannot become a DLL file probe
+PASS x86 probes target SysWOW64 from the x64 test process
+PASS Unknown native architecture cannot produce false system DLL absence
+PASS Conditional delay-load kind survives file observation
+PASS Denied DLL reads remain unknown
+RESULT: 8 DLL observation checks passed; no DLL was loaded
+PASS Windows PowerShell collector syntax
+PASS exact device source
+PASS exact DOS source
+PASS native spaced field names
+PASS ambiguous parent aliases
+PASS ambiguous target aliases
+PASS audit event
+PASS different provider
+PASS other source directory
+PASS source basename prefix
+PASS other device volume
+PASS old event
+PASS future event
+PASS duplicate field
+PASS missing target
+PASS invalid XML
+PASS oversized XML
+PASS DTD rejected
+PASS normalized source correlation
+PASS retained native event schema and policy GUID (version ID is distinct)
+RESULT: 20 App Control checks passed; no event log or policy was changed
+PASS valid response
+PASS empty response
+PASS arbitrary response
+PASS no dialogs
+PASS wrong file type
+PASS success log
+PASS failed log
+PASS duplicate success
+PASS conflicting log
+PASS absent result
+PASS padded success is not canonical
+PASS missing evidence withheld
+PASS oversized evidence withheld
+RESULT: 13 checks passed; no installer executed
+Response file: C:\Users\Server\Documents\Codex\2026-10-28\so-what-all-has-happened-since\verification-results\netfx3-final-0535b12a7eda4a6caed4648e59feaedf\response files [fixture] O'Brien\setup.iss
+Installer: C:\Users\Server\Documents\Codex\2026-10-28\so-what-all-has-happened-since\verification-results\netfx3-final-0535b12a7eda4a6caed4648e59feaedf\response files [fixture] O'Brien\setup.exe
+Starting Fixture installation...
+Fixture installer exited with code 0
+Installation completed successfully.
+PASS Literal bracket/space/apostrophe response path reaches mocked install launch quoted
+Response file: C:\Users\Server\Documents\Codex\2026-10-28\so-what-all-has-happened-since\verification-results\netfx3-final-0535b12a7eda4a6caed4648e59feaedf\response files [fixture] O'Brien\setup.iss
+PASS Missing install response file fails before process launch
+Response file: C:\Users\Server\Documents\Codex\2026-10-28\so-what-all-has-happened-since\verification-results\netfx3-final-0535b12a7eda4a6caed4648e59feaedf\response files [fixture] O'Brien\setup.iss
+Installer: C:\Users\Server\Documents\Codex\2026-10-28\so-what-all-has-happened-since\verification-results\netfx3-final-0535b12a7eda4a6caed4648e59feaedf\response files [fixture] O'Brien\setup.exe
+Starting Fixture installation...
+Fixture installer exited with code 3010
+Installation completed successfully. A reboot is required.
+PASS Install response script accepts a reboot-required result without executing a reboot
+Response file: C:\Users\Server\Documents\Codex\2026-10-28\so-what-all-has-happened-since\verification-results\netfx3-final-0535b12a7eda4a6caed4648e59feaedf\response files [fixture] O'Brien\setup.iss
+Installer: C:\Users\Server\Documents\Codex\2026-10-28\so-what-all-has-happened-since\verification-results\netfx3-final-0535b12a7eda4a6caed4648e59feaedf\response files [fixture] O'Brien\setup.exe
+Starting Fixture installation...
+Fixture installer exited with code 1603
+PASS Install response script reports unsuccessful installer exit codes
+Uninstall response file: C:\Users\Server\Documents\Codex\2026-10-28\so-what-all-has-happened-since\verification-results\netfx3-final-0535b12a7eda4a6caed4648e59feaedf\response files [fixture] O'Brien\uninstall.iss
+Starting validated silent uninstall for Fixture...
+PASS Validated uninstall script finds staged literal response file and quotes its path
+PASS Missing uninstall response file fails before process launch
+Uninstall response file: C:\Users\Server\Documents\Codex\2026-10-28\so-what-all-has-happened-since\verification-results\netfx3-final-0535b12a7eda4a6caed4648e59feaedf\response files [fixture] O'Brien\uninstall.iss
+Starting validated silent uninstall for Fixture...
+PASS Validated response uninstall accepts product-already-absent result
+Uninstall response file: C:\Users\Server\Documents\Codex\2026-10-28\so-what-all-has-happened-since\verification-results\netfx3-final-0535b12a7eda4a6caed4648e59feaedf\response files [fixture] O'Brien\uninstall.iss
+Starting validated silent uninstall for Fixture...
+PASS Validated response uninstall reports unsuccessful exit codes
+RESULT: 8 passed, 0 failed; process launch mocked throughout
+PASS bootstrap marker: valid
+PASS correct handoff/exit and failure evidence: valid
+PASS bootstrap marker: parse-error
+PASS correct handoff/exit and failure evidence: parse-error
+PASS bootstrap marker: runtime-error
+PASS correct handoff/exit and failure evidence: runtime-error
+RESULT: 9 bootstrap checks passed; only inert scripts executed

@@ -1,0 +1,46 @@
+PASS No requirement means no runtime/servicing queries
+PASS Failure explained: restricted
+PASS Host context never serviced
+PASS Single verified provisioning attempt
+PASS Repeated requests do not reinstall verified runtime
+PASS Online command cannot reboot and uses Windows Update default
+PASS Optional guest source uses DISM offline mode
+PASS Failure explained: No installer retry
+PASS Failed/timed-out command is not provisioned: 12006
+PASS Failure explained: No installer retry
+PASS Failure never loops servicing
+PASS Failure explained: No installer retry
+PASS Failed/timed-out command is not provisioned: 14098
+PASS Failure explained: No installer retry
+PASS Failure never loops servicing
+PASS Failure explained: No installer retry
+PASS Failed/timed-out command is not provisioned: -2
+PASS Failure explained: No installer retry
+PASS Failure never loops servicing
+PASS Failure explained: REBOOT REQUIRED
+PASS 3010 stops installer until guest reboot
+PASS Failure explained: REBOOT REQUIRED
+PASS Pending feature is not reprovisioned
+PASS Failure explained: not both verified
+PASS Exit zero alone is not success
+PASS Failure explained: not both verified
+PASS Runtime probe failure prevents installer continuation
+PASS Existing runtime verified without servicing
+PASS Failure explained: feature state
+PASS Unknown feature state never triggers blind install
+PASS Failure explained: standalone installer
+PASS Standalone-only builds never use NetFx3 DISM
+PASS No unrelated provisioning trigger: missing DLL
+PASS No unrelated provisioning trigger: .NET Framework 4.8 is required
+PASS No unrelated provisioning trigger: .NET Framework 3.5 is optional
+PASS No unrelated provisioning trigger: .NET Framework 3.5 is not required
+PASS One installer retry after verified provisioning
+PASS Failed provisioning does not retry installer
+PASS Preserve non-placeholder update source: https://real-wsus.example:8531
+PASS Preserve non-placeholder update source: http://127.0.0.1:80
+PASS Preserve non-placeholder update source: other-server:80
+PASS Repair exact Sandbox placeholder once using guest update service
+PASS Already unselected placeholder needs no policy mutation
+PASS Invalid source manifest rejected before guest policy changes
+PASS Component traversal rejected before source reads or policy changes
+RESULT: 45 passed, 0 failed

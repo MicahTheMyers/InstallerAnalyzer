@@ -1,0 +1,8 @@
+  InstallerAnalyzer -> C:\Users\Server\Documents\Codex\2026-10-28\so-what-all-has-happened-since\InstallerAnalyzer\bin\Release\net8.0-windows\InstallerAnalyzer.dll
+  Verification -> C:\Users\Server\Documents\Codex\2026-10-28\so-what-all-has-happened-since\Verification\bin\Release\net8.0-windows\Verification.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:05.23

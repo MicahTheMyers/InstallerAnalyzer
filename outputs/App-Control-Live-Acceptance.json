@@ -1,0 +1,7 @@
+{
+  "ExpectedFailureVerified": true,
+  "Category": "ApplicationControlBlocked",
+  "Infrastructure": true,
+  "Result": "FAIL",
+  "EvidenceArtifact": "C:\\Users\\Server\\Documents\\Codex\\2026-10-28\\so-what-all-has-happened-since\\verification-results\\ip-scanner-policy-software-7ab8e40792b24d11b493a0ace7051cec\\TestResults\\2026-10-29_183738_158c9804e85c42ebb34acd25f084d83e\\001_Advanced_IP_Scanner_2.5.4594.1.exe\\app-control-evidence.json"
+}

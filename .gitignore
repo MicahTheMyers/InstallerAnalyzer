@@ -1,19 +1,25 @@
-# .NET / Visual Studio build output
 bin/
 obj/
+Build/
+Release/
+publish/
 .vs/
 *.user
 *.suo
-
-# Local release / publish output
-Release/
-publish/
-Installer/Output/
-
-# Temporary and diagnostic files
-*.iss.tmp
+verification-results/
+.codex-remote-attachments/
+__pycache__/
+*.py[cod]
 *.log
-
-# OS / editor noise
+*.zip
+*.pfx
+*.p12
+*.key
+*.vhd
+*.vhdx
+*.iso
+*.cab
+.env
+.env.*
 .DS_Store
 Thumbs.db

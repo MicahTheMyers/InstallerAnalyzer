@@ -1,0 +1,52 @@
+{
+  "FullWindowsVM": {
+    "RebootRequired": false,
+    "NetFx3Provisioning": {
+      "Status": "Provisioned",
+      "Evidence": "This application requires .NET Framework 3.5",
+      "Detail": "",
+      "Attempted": true,
+      "Provisioned": true,
+      "RuntimeVerified": true,
+      "RequiresFullWindowsVM": false,
+      "RestartNeeded": false,
+      "ExitCode": 0
+    },
+    "FeatureBefore": "Disabled with Payload Removed"
+  },
+  "FreshSandbox": {
+    "RebootRequired": false,
+    "NetFx3Provisioning": {
+      "Status": "Provisioning failed",
+      "Evidence": "This application requires .NET Framework 3.5",
+      "Detail": "DISM failed or timed out (exit 12006). This environment requires a full Windows VM with .NET 3.5 provisioned; see netfx3-install.txt. No installer retry was performed.",
+      "Attempted": true,
+      "Provisioned": false,
+      "RuntimeVerified": false,
+      "RequiresFullWindowsVM": true,
+      "RestartNeeded": false,
+      "ExitCode": 12006
+    },
+    "Failure": "PREREQUISITE REQUIRED: .NET Framework 3.5. DISM failed or timed out (exit 12006). This environment requires a full Windows VM with .NET 3.5 provisioned; see netfx3-install.txt. No installer retry was performed."
+  },
+  "SandboxEvidenceFolder": "C:\\Users\\Server\\Documents\\Codex\\2026-10-28\\so-what-all-has-happened-since\\verification-results\\netfx3-production-sandbox-6ab20168c51f46d095dcc11fd0202f37",
+  "VMEvidenceFolder": "C:\\Users\\Server\\Documents\\Codex\\2026-10-28\\so-what-all-has-happened-since\\verification-results\\netfx3-full-vm\\production-helper-results",
+  "Scope": "Actual production provisioning helper, not a vendor installer lifecycle",
+  "FinalVM": {
+    "Name": "InstallerAnalyzer-NetFx3-6103d40d",
+    "Id": "5ad5cdda-31bf-4b75-8234-81163a6e0eb7",
+    "State": "Off",
+    "Network": [
+      {
+        "SwitchName": null,
+        "Connected": false
+      }
+    ],
+    "Checkpoints": [
+      {
+        "Name": "NetFx3-Probe-Completed"
+      }
+    ],
+    "HostNetFx3": "DisabledWithPayloadRemoved"
+  }
+}

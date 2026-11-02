@@ -1,0 +1,566 @@
+PASS Pass remains pass
+PASS Failed installer improves
+PASS Passed installer regresses
+PASS Failure remains failure
+PASS Changed bytes are new even with identical product metadata
+PASS Renamed identical bytes match
+PASS Sandbox failure is not installer regression
+PASS Recovery from analyzer failure is not installer improvement
+PASS Cancellation is not a regression
+PASS Queued untested installer remains untested
+PASS Unknown timeout is inconclusive rather than an installer regression
+PASS Known heartbeat timeout remains visibly infrastructure
+PASS Different modes are not compared as regressions
+PASS Filename alone never matches
+PASS Hashless legacy match requires stable product identity
+PASS Different publisher rejects legacy match
+PASS Missing hash does not match known hash
+PASS Ambiguous legacy identities are not paired
+PASS All runs survive service restart
+PASS Baseline survives service restart
+PASS Persisted results compare correctly after restart
+PASS Clearing baseline preserves runs
+PASS Stopped baseline rejected
+PASS Incomplete baseline rejected
+PASS Corrupt run is reported without hiding valid runs
+PASS Corrupt baseline is reported without crash
+PASS Unknown schema rejected
+PASS Unsafe identity rejected
+PASS Atomic writes leave no temporary files
+PASS Retest identity detects replaced bytes
+PASS Uninstaller UI classified
+PASS Installer UI classified
+PASS Prerequisite classified
+PASS Required word is not mistaken for UI evidence
+PASS Reboot classified separately
+PASS Heartbeat timeout belongs to infrastructure
+PASS Static preparation failure belongs to analyzer
+PASS Startup cancellation is not a Sandbox fault
+PASS Local explanation exposes classification, evidence and attempts
+PASS Loaded native SQLite engine meets the CVE-2025-6965 security baseline (3.50.2 or later)
+PASS Catalog records complete lifecycle with structured evidence
+PASS Catalog retains per-proof source and detection history
+PASS Catalog retains validated detection and local source
+PASS Host cannot promote a schema-3 lifecycle before evidence collection completes
+PASS Host recovery remains available after final evidence has been written
+PASS Independent proof adds history
+PASS Older proof replay after newer proof does not increase count
+PASS Validation count agrees with unique proof history
+PASS Failed retest increments failure count without losing strategy
+PASS Same signed product receives candidate from older version
+PASS Different signer cannot inherit a product strategy
+PASS Invalid signature cannot inherit a product strategy
+PASS Matching signer alone is insufficient for inheritance
+PASS Inheritance never records validation for the new version
+PASS Catalog export excludes private local installer paths
+PASS Import preserves stronger local proof
+PASS SQLite online backup creates a nonempty consistent snapshot
+PASS Imported entries do not enter the trusted local catalog
+PASS Imported validation claims remain untrusted
+PASS Imported exact hash supplies only a fresh-validation candidate
+PASS Unsupported import rejected
+PASS Script-shaped import rejected
+PASS Rejected import leaves prior candidates intact
+PASS Backup restore safely merges candidates without asserting fresh local proof
+PASS Catalog removal removes its metadata and candidate
+PASS MSI family fixture records a known strategy
+PASS Matching signed MSI UpgradeCode supports renamed-product strategy candidates
+PASS Conflicting MSI UpgradeCode defeats an identical display name
+PASS Malformed MSI metadata fails without installing or repairing anything
+PASS Real USB MSI exposes product and upgrade identity without executing actions
+PASS Read-only MSI inspection preserves source bytes and reads package architecture
+PASS Missing NetFx3 is recognized without provisioning
+PASS Runtime mentions do not automatically imply a missing prerequisite
+PASS Declared launch conditions and absent registry probes are distinguished from evaluated missing prerequisites
+PASS Payload execution evidence preserves original deployment source
+PASS MSI payload execution is correlated with exact system msiexec installation arguments
+PASS Download-output references retain process identity without claiming successful downloads
+PASS Payload path prefixes do not fabricate MSI execution evidence
+PASS Relationship graph preserves distinct source and mechanism roles
+PASS Intelligence report artifacts are written
+PASS Normalized explanations, prerequisite and graph artifacts are retained for diagnostics
+PASS Intelligence enrichment preserves unknown raw diagnostics and bundle protection evidence
+PASS Diagnostic export includes evidence and excludes installer binaries and arbitrary files
+PASS Diagnostic logs redact credential values
+PASS Diagnostic bundle records included and omitted evidence
+PASS Diagnostic export preserves successful and failed InstallShield replay logs
+PASS Diagnostic export preserves host startup, guest bootstrap and guest script failure evidence
+PASS Diagnostic export retains normalized App Control evidence
+PASS Unavailable source diagnostics are explained without losing normalized result
+PASS Detection output uses the selected lifecycle-tested rule
+PASS Unknown before-install state cannot become a validated detection rule
+PASS Registry detection rejects non-registry paths
+PASS Queue executor is sequential and stops before the next item on cancellation
+PASS Unknown discovery includes roadmap evidence functions
+PASS Msi discovery includes roadmap evidence functions
+PASS Msix discovery includes roadmap evidence functions
+PASS InstallShield discovery includes roadmap evidence functions
+PASS InnoSetup discovery includes roadmap evidence functions
+PASS Nsis discovery includes roadmap evidence functions
+PASS WixBurn discovery includes roadmap evidence functions
+PASS Squirrel discovery includes roadmap evidence functions
+PASS NvidiaSfx discovery includes roadmap evidence functions
+PASS QSetup discovery includes roadmap evidence functions
+PASS Bootstrapper discovery includes roadmap evidence functions
+PASS Token-shaped installer names and arguments remain literal data
+PASS InstallShield recorder uses the shared schema-3 evidence and protection engine
+PASS InstallShield recording preserves package arguments as literal data
+PASS Recorded response creation and both replay logs are checked alongside lifecycle identity
+PASS Host startup diagnostics cannot establish guest readiness
+PASS Guest bootstrap marker is distinct from analysis readiness
+PASS An empty heartbeat cannot establish analysis startup
+PASS A nonempty analysis heartbeat establishes startup only
+PASS Guest bootstrap errors are retained with bounded reads
+PASS Slow startup after the former 35-second deadline remains alive until its real heartbeat
+PASS Absent guest startup times out with phase-specific diagnostics at the bounded three-minute budget
+PASS A started guest without analysis heartbeat explains the distinct startup phase
+PASS Guest script failures surface immediately instead of becoming silent startup retries
+PASS Startup cancellation wins even if a heartbeat would otherwise be ready
+PASS A transient startup artifact sharing race can recover without restarting the guest
+PASS App Control evidence requires a scoped enforced block for the exact source image
+PASS Policy blocks are explained as environment failures before generic detection failure
+PASS Policy failure points to the retained policy evidence
+PASS Cancellation retains precedence over earlier policy events
+PASS A completed lifecycle is not relabelled by an earlier rejected policy-blocked attempt
+PASS Audit-only policy events cannot establish an enforced block
+PASS An unrelated provider cannot establish an App Control block
+PASS Same basename outside the staged source path is not correlated
+PASS Stale policy events before this run are excluded
+PASS Events after the capture window are excluded
+PASS Unavailable policy collection cannot establish a block
+PASS Unscoped event hints cannot establish a block
+PASS A block without a target file is incomplete evidence
+PASS Invalid policy capture times are not accepted
+PASS Legacy or explicit-null policy evidence remains unknown
+PASS A bounded partial read can retain an individually correlated enforced block
+PASS Installer Sandbox uses software guest graphics with read-only input and the production bootstrap
+PASS Completed historical summaries migrate into persistent run history
+PASS Migration recovers only a recorded matching installer hash and diagnostics folder
+PASS Legacy outcomes retain their source provenance rather than claiming new validation
+PASS Migration leaves the saved baseline and source summary unchanged
+PASS Repeated migration is idempotent
+PASS Copied identical summaries do not duplicate history
+PASS Migration never backfills old hashes from today's same-named installer
+PASS Modern runs already present in history are not remigrated
+PASS Malformed historical summaries are reported without hiding valid history
+PASS Validated registry identity outranks an executable-version fallback
+PASS Executable-version detection tests the recorded version and distinguishes access failures from absence
+PASS An incomplete file baseline cannot validate executable detection
+PASS Service/executable detection uses exact service identity and the recorded executable
+PASS Lifecycle-tested directory fallback requires a directory rather than any same-named file
+PASS A known missing prerequisite is more informative than generic installer UI
+PASS Installer sign-in UI is classified as an authentication requirement
+PASS An earlier reboot flag does not hide a concrete uninstall failure
+PASS Observed driver changes with unsupported lifecycle proof are distinguished from installer regressions
+PASS Exhausted candidate discovery receives the structured no-strategy category
+PASS MSI detection without an uninstall key uses read-only product state and releases its COM object
+PASS Malformed native MSI identities cannot generate detection code
+PASS Application registry detection preserves the measured view and escapes data without reading raw values
+PASS Unsupported application registry roots cannot generate a weaker substituted rule
+PASS Observed product relationships distinguish primary, runtime, declared dependency, explicit offer, policy bundle and unknown roles
+PASS A runtime name or matching publisher does not assert a proven requirement
+PASS The persisted relationship graph uses evidence-backed bundle classifications
+PASS A machine-wide service delta cannot silently become product detection evidence
+PASS Payload inspection classifies supporting files and exposes incomplete scanning
+PASS Installer-owned static labels can explain an otherwise generic UI failure
+PASS Negated prerequisite and reboot messages cannot manufacture requirements
+PASS An explicit identity-discovery failure is not hidden by an unset default process exit
+PASS Missing, malformed or unsupported update checksums are rejected before downloading
+PASS Missing, malformed or unsupported update checksums are rejected before downloading
+PASS Missing, malformed or unsupported update checksums are rejected before downloading
+PASS Missing, malformed or unsupported update checksums are rejected before downloading
+PASS Missing, malformed or unsupported update checksums are rejected before downloading
+PASS Missing, malformed or unsupported update checksums are rejected before downloading
+PASS Unexpected update origins cannot become executable downloads
+PASS Unexpected update origins cannot become executable downloads
+PASS Unexpected update origins cannot become executable downloads
+PASS Unexpected update origins cannot become executable downloads
+PASS Unexpected update origins cannot become executable downloads
+PASS Unexpected update origins cannot become executable downloads
+PASS Unexpected update origins cannot become executable downloads
+PASS Unexpected update origins cannot become executable downloads
+PASS Unexpected update origins cannot become executable downloads
+PASS Invalid version, traversal tag, installer name and downgrade are rejected
+PASS Invalid version, traversal tag, installer name and downgrade are rejected
+PASS Invalid version, traversal tag, installer name and downgrade are rejected
+PASS Invalid version, traversal tag, installer name and downgrade are rejected
+PASS An untrusted running publisher blocks installation before network or staging writes
+PASS An empty publisher pin cannot authorize an update
+PASS A checksum mismatch cleans the staged file and never launches
+PASS An unsigned update cannot pass even when its bytes match the checksum
+PASS A valid signature from a different publisher is rejected
+PASS A correctly signed older installer cannot be relabeled as a newer release
+PASS A different product signed by the same certificate is not an application update
+PASS Redirects cannot escape the approved HTTPS GitHub hosts
+PASS A rejected redirect destination is never requested
+PASS Redirects cannot escape the approved HTTPS GitHub hosts
+PASS A rejected redirect destination is never requested
+PASS Redirects cannot escape the approved HTTPS GitHub hosts
+PASS A rejected redirect destination is never requested
+PASS Redirects cannot escape the approved HTTPS GitHub hosts
+PASS A rejected redirect destination is never requested
+PASS Redirects cannot escape the approved HTTPS GitHub hosts
+PASS A rejected redirect destination is never requested
+PASS Download redirect loops are bounded
+PASS Redirect processing stops after the allowed hop count
+PASS HTTP download errors do not leave executable files
+PASS An oversized declared download is rejected before staging
+PASS Unknown-length downloads are still size limited and cleaned up
+PASS A truncated download cannot be verified or retained
+PASS An empty update is rejected and cleaned up
+PASS Cancellation prevents download and installer launch
+PASS Approved GitHub redirect, correct checksum and expected valid signature produce a verified download
+PASS The verified installer remains locked against replacement before launch
+PASS Launch rechecks checksum and publisher and passes only the verified path to the fake launcher
+PASS A verified update cannot start an installer more than once
+PASS Disposing a verified download removes the inert staged fixture
+PASS Downloads use isolated random staging folders rather than release-controlled paths
+PASS Signature trust changes before launch prevent installer execution
+PASS Unverified ownership and disposed downloads cannot be launched
+PASS A repository with no published release still has a supported update-check result
+PASS Release metadata requests do not follow an unexpected API redirect
+PASS Real MSI table reader preserves declared file search criteria
+PASS MSI metadata collection leaves fixture database bytes unchanged
+PASS File absence alone never establishes a missing prerequisite
+PASS Unknown file criteria preserve observed metadata without declaring a match
+PASS Denied file observation is not absence
+PASS Diagnostic file evidence preserves false and unknown separately
+PASS Write requests alone do not establish completed payload writes
+PASS Kernel open, issuing thread, process lifetime and successful completion establish a file writer
+PASS Worker-thread event header PID does not override the issuing thread owner
+PASS Failed file operations do not become completed writes
+PASS Completion byte count cannot exceed the requested write size
+PASS Expired IRP correlations are rejected
+PASS Unknown issuing threads remain unattributed
+PASS Reused PIDs cannot inherit an earlier installer process scope
+PASS Terminated thread identity is not reused for file attribution
+PASS File-object reuse by an unscoped opener invalidates prior attribution
+PASS An IRP reused for another operation cannot complete an old write
+PASS File cleanup invalidates its file-object path mapping
+PASS Trace filters exclude unsafe or irrelevant path: \Device\HarddiskVolume99\Temp\payload.msi
+PASS Trace filters exclude unsafe or irrelevant path: C:\InstallerInput\source.msi
+PASS Trace filters exclude unsafe or irrelevant path: C:\Temp\secret.txt
+PASS Trace filters exclude unsafe or irrelevant path: \\server\share\payload.msi
+PASS Trace filters exclude unsafe or irrelevant path: C:\Temp\..\payload.msi
+PASS Out-of-order trace records clear stale correlation state
+PASS Trace XML forbids DTD and entity expansion
+PASS Trace-only temporary payloads retain their writer without fabricated execution
+PASS Network-active writers are candidates without fabricated download success
+PASS Relationship graph carries measured writer attribution
+PASS Connections from another PID lifetime cannot attach to a file writer
+PASS Filtered trace evidence is retained in normalized diagnostic artifacts
+PASS Unavailable optional tracing does not invalidate an independently completed lifecycle
+PASS Writer evidence cannot bypass final evidence-completion gating
+PASS Bounded native reader loop disposes event records and commits a final checkpoint
+PASS Native trace reader enforces its event budget
+PASS Native trace reader stops before consuming records once its time budget expires
+PASS Analysis reads succeed while the guest retains a write-sharing handle
+PASS Exclusively locked analysis reads fail within a bounded retry budget
+PASS Growing or oversized analysis text cannot exceed the reader character budget
+PASS BITS mapping joins requested source, local payload and active installer lifetime
+PASS BITS report omits URI credentials, query and path
+PASS BITS mapping does not fabricate a completed write or download
+PASS Repeated BITS mappings are deduplicated
+PASS Unsupported BITS remote reference remains unreported: file:///C:/payload.msi
+PASS Unsupported BITS remote reference remains unreported: ftp://example.org/file
+PASS Unsupported BITS remote reference remains unreported: not a URI
+PASS BITS mapping filters unsafe or irrelevant local path: \\server\payload.msi
+PASS BITS mapping filters unsafe or irrelevant local path: C:\InstallerInput\payload.msi
+PASS BITS mapping filters unsafe or irrelevant local path: C:\Temp\..\payload.msi
+PASS BITS mapping filters unsafe or irrelevant local path: C:\Temp\secret.txt
+PASS Unscoped BITS clients do not inherit installer attribution
+PASS BITS PID reuse cannot inherit the previous installer lifetime
+PASS BITS records after the client exits stay unattributed
+PASS BITS mappings survive normalized artifacts and the human-readable report
+PASS BITS completion joins explicit download direction, complete progress, mapping and service completion bytes
+PASS Completed-transfer evidence omits URI secrets and retains the content-integrity boundary
+PASS A completion event without a sampled Download/Transferred state remains unverified
+PASS Transferred state without a service completion signal remains unverified
+PASS Incomplete or failed job state cannot establish completion: Queued
+PASS Incomplete or failed job state cannot establish completion: Connecting
+PASS Incomplete or failed job state cannot establish completion: Transferring
+PASS Incomplete or failed job state cannot establish completion: Error
+PASS Incomplete or failed job state cannot establish completion: TransientError
+PASS Incomplete or failed job state cannot establish completion: Suspended
+PASS Uploads cannot become download evidence
+PASS Same-origin URLs with different paths/query cannot substitute for the mapped source
+PASS A different local destination cannot acquire download evidence
+PASS Unknown/mismatched completion byte count remains unverified: 22
+PASS Unknown/mismatched completion byte count remains unverified: 18446744073709551615
+PASS Unknown/mismatched completion byte count remains unverified: -1
+PASS Partial file progress cannot establish completion
+PASS Complete native job file counts are required
+PASS Unsupported multi-file jobs remain unverified
+PASS A different job owner cannot inherit transfer attribution
+PASS Cancellation/ownership change invalidates completion attribution: 5
+PASS Cancellation/ownership change invalidates completion attribution: 16388
+PASS Samples taken after the completion event are not backdated
+PASS A service may finish after the observed mapping client exits without inventing a new process identity
+PASS Observed job source changes invalidate prior transfer attribution
+PASS Out-of-order event streams withhold completed-download attribution
+PASS Locked post-completion local file snapshot retains a digest without claiming network content identity
+PASS An unavailable file lock cannot produce a fingerprint
+PASS Same-size replacement is measured as current local bytes without a network-content integrity claim
+PASS A changed local file length does not masquerade as matching transfer bytes
+PASS Deleted temporary downloads retain completion evidence without fabricated file identity
+PASS File fingerprint size budget is enforced before reading
+PASS Completed temporary downloads enter the payload graph without fabricated execution
+PASS Completed-download evidence survives artifacts and readable reports
+PASS Diagnostic export retains completed-download evidence
+PASS Response script requires a literal existing response file
+PASS Response package contains both response files and the selected installer only
+PASS Response package preserves exact setup.iss contents
+PASS Response package preserves exact uninstall.iss contents
+PASS PE32+ normal and delay import directories are read as data
+PASS Direct dependencies, conditional delay loads and API-set contracts remain distinct
+PASS PE inspection never modifies or executes fixture bytes
+PASS PE32 import architecture is retained
+PASS Out-of-file import RVAs are rejected
+PASS Import names cannot become directory traversal probes
+PASS Hostile PE header offsets are bounded before header parsing
+PASS Non-PE input is not labelled as having no dependencies
+PASS Managed AnyCPU images do not fabricate native x86 system-path observations
+PASS Real Logitech source declares the observed Visual C++ import without host execution
+PASS A DLL absent from one search location does not become a proven missing prerequisite
+PASS Condition follows documented literal semantics: 1
+PASS Condition follows documented literal semantics: 0
+PASS Condition follows documented literal semantics: -1
+PASS Condition follows documented literal semantics: NOT 0
+PASS Condition follows documented literal semantics: 1 AND 0 OR 1
+PASS Condition follows documented literal semantics: 1 OR 0 AND 0
+PASS Condition follows documented literal semantics: (1 OR 0) AND 0
+PASS Condition follows documented literal semantics: 1 XOR 1
+PASS Condition follows documented literal semantics: 1 EQV 1
+PASS Condition follows documented literal semantics: 0 IMP 0
+PASS Condition follows documented literal semantics: 1 IMP 0
+PASS Condition follows documented literal semantics: 1 OR 0 XOR 1
+PASS Condition follows documented literal semantics: 10 < 2
+PASS Condition follows documented literal semantics: "A" ~= "a"
+PASS Condition follows documented literal semantics: "Abc" ~>< "B"
+PASS Condition follows documented literal semantics: "abc" << "a"
+PASS Condition follows documented literal semantics: "abc" >> "c"
+PASS Condition follows documented literal semantics: 5 >< 1
+PASS Condition follows documented literal semantics: 65536 << 1
+PASS Condition follows documented literal semantics: 65537 >> 1
+PASS Condition follows documented literal semantics: "bad" = 1
+PASS Condition follows documented literal semantics: "bad" <> 1
+PASS Explicit absent product state supplies an unset Installed property
+PASS Nonempty property zero is true but compares numerically when requested
+PASS String-to-integer comparisons require MSI's canonical decimal form
+PASS String ordering and signed high-word extraction match the native oracle
+PASS Unverified non-ASCII case folding stays unknown
+PASS Unknown observations retain conservative three-valued Boolean behavior
+PASS Known Boolean operands can resolve otherwise unknown expressions
+PASS MSI property identifiers remain case sensitive
+PASS Explicit environment observations use case-insensitive names
+PASS Unobserved component/feature action state is not invented
+PASS Observed quotes remain data and cannot inject Boolean operators
+PASS Malformed/unsupported/over-budget condition remains unknown
+PASS Malformed/unsupported/over-budget condition remains unknown
+PASS Malformed/unsupported/over-budget condition remains unknown
+PASS Malformed/unsupported/over-budget condition remains unknown
+PASS Malformed/unsupported/over-budget condition remains unknown
+PASS Malformed/unsupported/over-budget condition remains unknown
+PASS Malformed/unsupported/over-budget condition remains unknown
+PASS Unknown symbol names are retained without raw observed property values
+PASS Scoped observed condition evaluation never substitutes for actual launch-sequence acceptance
+PASS Terminal MSI property observations resolve known numeric prerequisite expressions
+PASS Missing Installed in a terminal dump is unknown rather than inherited from the earlier product baseline
+PASS Hidden and sensitive-name properties remain unbound even when a log exposes values
+PASS An explicitly empty terminal property remains distinct from an unreported property
+PASS Terminal property condition results retain their phase boundary
+PASS Normalized MSI property evidence retains no raw property values
+PASS A different product cannot contribute MSI property bindings
+PASS A truncated terminal property block contributes no bindings
+PASS Multiline/unsupported log continuation invalidates the property block
+PASS Duplicated package identity invalidates property attribution
+PASS Duplicate property records are ambiguous rather than last-value-wins
+PASS Runtime hidden-property declarations suppress bindings
+PASS Masked hidden-property lists cause all values to remain withheld
+PASS Truncated metadata hidden-property lists cannot expose later hidden values
+PASS Masked values never become condition operands
+PASS Oversized property values remain unknown
+PASS Client-side properties are not merged into a server snapshot
+PASS Property log input has a bounded read budget
+PASS Initial product-state and terminal log evaluations remain separate through report enrichment
+PASS Service absence alone does not establish a missing requirement
+PASS Property evidence artifacts and readable reports carry scoped results without raw values
+PASS Diagnostic exports include property and service evidence
+PASS Unavailable property logs cannot create observations
+PASS Comparison area has its own layout row
+PASS WPF comparison presents persisted model classifications
+PASS WPF selection presents both results
+PASS Catalog search filters by publisher metadata
+PASS Catalog selection explains source, strategy and proof counts
+PASS Catalog navigation switches pages without overlapping Test Mode
+PASS WPF baseline action persists the displayed completed run
+PASS WPF clear-baseline action preserves saved history
+PASS WPF refuses to save a stopped run as a baseline
+PASS WPF Failed retest rejects same-name files with replaced bytes
+PASS WPF Infrastructure retest rejects same-name files with replaced bytes
+PASS WPF Unknown retest rejects same-name files with replaced bytes
+PASS WPF cancels a prepared retest if the displayed run changes while hashing
+PASS WPF retest respects an active analysis operation
+PASS Logo extraction preserves the real 256px primary executable icon
+PASS Logo resource inspection leaves executable bytes unchanged
+PASS Logo extraction selects the largest native ICO frame rather than its first small frame
+PASS Malformed icon resources are refused without an application launch
+PASS Oversized PNG dimensions inside an ICO are refused before decoding
+PASS NetFx3 explicit requirement recognized
+PASS NetFx3 does not infer requirement from: Missing DLL 0xc0000135
+PASS NetFx3 does not infer requirement from: .NET Framework 4.8 is required
+PASS NetFx3 does not infer requirement from: .NET Framework 3.5 is optional
+PASS NetFx3 does not infer requirement from: .NET Framework 3.5 is not required
+PASS NetFx3 declared MSI preflight evidence is retained
+PASS Managed CLR2 metadata establishes NetFx3 preflight requirement without executing installer
+PASS CLR4 runtime configuration prevents unnecessary CLR2 provisioning
+PASS NetFx3 environment failure takes precedence over prerequisite UI
+PASS Recoverable Sandbox provisioning failure does not require a second VM backend
+PASS NetFx3 restart-needed is not installation success
+PASS Final lifecycle pass still takes precedence over earlier prerequisite evidence
+PASS Verified provisioning resolves earlier missing-runtime UI evidence
+PASS NetFx3 servicing has bounded execution and no automatic reboot
+PASS Sandbox source staging copies only matching Windows .NET components
+PASS Sandbox staged components have bounded manifest and file hashes
+PASS Unchanged dashboard refreshes retain the highlighted script document
+PASS Unchanged dashboard refreshes retain the decoded logo
+PASS One hundred presentation refreshes do not rewrite analysis history
+PASS Explicit script refresh also reuses unchanged highlighting
+PASS Changed script arguments invalidate highlighting
+PASS Theme text color changes invalidate cached highlighting
+PASS Replacing a same-path logo reloads its actual pixels
+PASS Changed logo dimensions remain visible in the preview
+PASS Explicit analysis transitions still persist history
+PASS Background queue refresh completes while the UI dispatcher remains responsive
+PASS Queue replacement preserves existing item identity and selection
+PASS A superseded queue scan cannot replace the newest queue
+PASS An active test run prevents a pending scan from replacing its queue
+PASS Queue scanning respects cancellation before disk enumeration
+PASS Catalog selection reuses the inspection identity within one stable snapshot
+PASS Stable catalog inspection refuses concurrent writes and file replacement
+PASS Independent catalog lookup rehashes a replaced file instead of trusting its stale identity
+PASS Real static identity and Authenticode inspection work while the installer snapshot is read-locked
+PASS Real MSI metadata inspection remains available within the stable read-locked snapshot
+PASS Claude uses fixed HTTPS Messages endpoint
+PASS Claude authentication stays in provider-specific headers
+PASS Claude has read-only system instructions and no tools
+PASS Claude redacts diagnostic secrets and filters history roles
+PASS Claude aggregates text blocks
+PASS Claude requires Test Mode
+PASS Claude requires AI Assist enabled
+PASS Claude missing key gives provider-specific setup advice
+PASS Claude pre-cancellation
+PASS Disabled, unconfigured and cancelled Claude requests send nothing
+PASS Claude refuses tool/action responses
+PASS Claude refuses tool/action responses
+PASS Claude response byte limit enforced
+PASS Claude HTTP errors are safely explained: Unauthorized
+PASS Claude HTTP errors are safely explained: TooManyRequests
+PASS Claude answer secrets are redacted
+PASS OpenAI and local Ollama responses remain supported
+PASS Provider keys use separate Windows-protected files
+PASS Removing Claude key preserves OpenAI key
+PASS Provider switching retains Claude model and clears unsaved key
+PASS Claude settings show correct key label and privacy disclosure
+PASS Claude provider and model persist without saving key into settings JSON
+PASS Switching back restores OpenAI model
+PASS Analyze response-file buttons remain visible with Sandbox off
+PASS Changing Sandbox mode does not enable recording without an installer (False)
+PASS Analyze response-file buttons remain visible with Sandbox on
+PASS Changing Sandbox mode does not enable recording without an installer (True)
+PASS TestQueueList empty list lets the page scroll down
+PASS TestQueueList empty list lets the page scroll up
+PASS TestQueueList scrollable list retains wheel input within its range
+PASS TestQueueList bottom edge passes downward scrolling to the page
+PASS TestResultsList empty list lets the page scroll down
+PASS TestResultsList empty list lets the page scroll up
+PASS TestResultsList scrollable list retains wheel input within its range
+PASS TestResultsList bottom edge passes downward scrolling to the page
+PASS Dark default body text remains readable against the page background
+PASS Dark AnalyzePage fits 1060 x 760
+PASS Dark script controls remain reachable at 1060 x 760
+PASS Dark TestModePage fits 1060 x 760
+PASS Dark CatalogPage fits 1060 x 760
+PASS Dark AnalyzePage fits 1240 x 900
+PASS Dark script controls remain reachable at 1240 x 900
+PASS Dark TestModePage fits 1240 x 900
+PASS Dark CatalogPage fits 1240 x 900
+PASS Dark AnalyzePage fits 1600 x 1000
+PASS Dark script controls remain reachable at 1600 x 1000
+PASS Dark TestModePage fits 1600 x 1000
+PASS Dark CatalogPage fits 1600 x 1000
+PASS SuperDark default body text remains readable against the page background
+PASS SuperDark AnalyzePage fits 1060 x 760
+PASS SuperDark script controls remain reachable at 1060 x 760
+PASS SuperDark TestModePage fits 1060 x 760
+PASS SuperDark CatalogPage fits 1060 x 760
+PASS SuperDark AnalyzePage fits 1240 x 900
+PASS SuperDark script controls remain reachable at 1240 x 900
+PASS SuperDark TestModePage fits 1240 x 900
+PASS SuperDark CatalogPage fits 1240 x 900
+PASS SuperDark AnalyzePage fits 1600 x 1000
+PASS SuperDark script controls remain reachable at 1600 x 1000
+PASS SuperDark TestModePage fits 1600 x 1000
+PASS SuperDark CatalogPage fits 1600 x 1000
+PASS Light default body text remains readable against the page background
+PASS Light AnalyzePage fits 1060 x 760
+PASS Light script controls remain reachable at 1060 x 760
+PASS Light TestModePage fits 1060 x 760
+PASS Light CatalogPage fits 1060 x 760
+PASS Light AnalyzePage fits 1240 x 900
+PASS Light script controls remain reachable at 1240 x 900
+PASS Light TestModePage fits 1240 x 900
+PASS Light CatalogPage fits 1240 x 900
+PASS Light AnalyzePage fits 1600 x 1000
+PASS Light script controls remain reachable at 1600 x 1000
+PASS Light TestModePage fits 1600 x 1000
+PASS Light CatalogPage fits 1600 x 1000
+PASS Purple default body text remains readable against the page background
+PASS Purple AnalyzePage fits 1060 x 760
+PASS Purple script controls remain reachable at 1060 x 760
+PASS Purple TestModePage fits 1060 x 760
+PASS Purple CatalogPage fits 1060 x 760
+PASS Purple AnalyzePage fits 1240 x 900
+PASS Purple script controls remain reachable at 1240 x 900
+PASS Purple TestModePage fits 1240 x 900
+PASS Purple CatalogPage fits 1240 x 900
+PASS Purple AnalyzePage fits 1600 x 1000
+PASS Purple script controls remain reachable at 1600 x 1000
+PASS Purple TestModePage fits 1600 x 1000
+PASS Purple CatalogPage fits 1600 x 1000
+PASS Hacker default body text remains readable against the page background
+PASS Hacker AnalyzePage fits 1060 x 760
+PASS Hacker script controls remain reachable at 1060 x 760
+PASS Hacker TestModePage fits 1060 x 760
+PASS Hacker CatalogPage fits 1060 x 760
+PASS Hacker AnalyzePage fits 1240 x 900
+PASS Hacker script controls remain reachable at 1240 x 900
+PASS Hacker TestModePage fits 1240 x 900
+PASS Hacker CatalogPage fits 1240 x 900
+PASS Hacker AnalyzePage fits 1600 x 1000
+PASS Hacker script controls remain reachable at 1600 x 1000
+PASS Hacker TestModePage fits 1600 x 1000
+PASS Hacker CatalogPage fits 1600 x 1000
+PASS Custom default body text remains readable against the page background
+PASS Custom AnalyzePage fits 1060 x 760
+PASS Custom script controls remain reachable at 1060 x 760
+PASS Custom TestModePage fits 1060 x 760
+PASS Custom CatalogPage fits 1060 x 760
+PASS Custom AnalyzePage fits 1240 x 900
+PASS Custom script controls remain reachable at 1240 x 900
+PASS Custom TestModePage fits 1240 x 900
+PASS Custom CatalogPage fits 1240 x 900
+PASS Custom AnalyzePage fits 1600 x 1000
+PASS Custom script controls remain reachable at 1600 x 1000
+PASS Custom TestModePage fits 1600 x 1000
+PASS Custom CatalogPage fits 1600 x 1000
+PASS Native window monitor work area is available
+PASS Maximized native window exactly fits monitor work area
+PASS Maximized footer stays inside visible work area above taskbar
+PASS Native bounds preserve minimum window dimensions within work area
+PASS Restore retains normal window dimensions
+PASS Secondary monitor pixel bounds respect bottom taskbar
+PASS Secondary monitor pixel bounds respect top taskbar
+PASS Secondary monitor pixel bounds respect left taskbar
+PASS Secondary monitor pixel bounds respect right taskbar
+RESULT: 565 passed, 0 failed

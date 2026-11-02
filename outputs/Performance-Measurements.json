@@ -1,0 +1,7 @@
+{
+  "Refreshes": 100,
+  "UnchangedDashboardMilliseconds": 4.7794,
+  "ForcedFullRefreshMilliseconds": 751.5636,
+  "QueueEntries": 512,
+  "Scope": "Inert local WPF fixture. Forced comparison explicitly rebuilds documents/reloads logo/saves history as the old presentation path did; not an old-binary or Sandbox startup benchmark."
+}

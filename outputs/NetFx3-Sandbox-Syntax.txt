@@ -1,0 +1,14 @@
+PASS payload trace worker PowerShell syntax
+PASS guest reducer compiles with the Windows PowerShell framework compiler; no tracing was started
+PASS source syntax and helper wiring: Unknown
+PASS source syntax and helper wiring: Msi
+PASS source syntax and helper wiring: Msix
+PASS source syntax and helper wiring: InstallShield
+PASS source syntax and helper wiring: InnoSetup
+PASS source syntax and helper wiring: Nsis
+PASS source syntax and helper wiring: WixBurn
+PASS source syntax and helper wiring: Squirrel
+PASS source syntax and helper wiring: NvidiaSfx
+PASS source syntax and helper wiring: QSetup
+PASS source syntax and helper wiring: Bootstrapper
+RESULT: 11 source assemblies parse; no discovery code or application DLL was executed

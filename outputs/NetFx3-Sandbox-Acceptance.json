@@ -1,0 +1,57 @@
+{
+  "GuestBuild": "26100.9711",
+  "FreshSandbox": true,
+  "ManualCabProvided": false,
+  "HelperAcceptance": {
+    "RebootRequired": false,
+    "NetFx3Provisioning": {
+      "Status": "Provisioned",
+      "Evidence": "This application requires .NET Framework 3.5",
+      "Detail": "",
+      "Attempted": true,
+      "Provisioned": true,
+      "RuntimeVerified": true,
+      "RequiresFullWindowsVM": false,
+      "RestartNeeded": false,
+      "ExitCode": 0,
+      "RestoredComponentCount": 37,
+      "GuestUpdateSourceAdjusted": true
+    }
+  },
+  "Source": {
+    "Source": "https://software-static.download.prss.microsoft.com/dbazure/888969d5-f34g-4e03-ac9d-1f9786c66749/26100.1.240331-1435.ge_release_amd64fre_CLIENT_LOF_PACKAGES_OEM.iso",
+    "PackageBytes": 71321276,
+    "Sha256": "DC3AF93AF5C64DC115409437D31018BAF2C3C46167806A599124BC905AE512F6",
+    "WholeIsoDownloaded": false
+  },
+  "RuntimeOutput": "CLR=2.0.50727.9157",
+  "AutomatedDotNetChecks": 565,
+  "AutomatedPowerShellChecks": 182,
+  "SourceFamiliesParsed": 11,
+  "ProductionLifecycle": {
+    "Passed": true,
+    "NetFx3Provisioning": {
+      "Status": "Provisioned",
+      "Evidence": "MSI LaunchCondition: This application requires .NET Framework 3.5",
+      "Detail": "",
+      "Attempted": true,
+      "Provisioned": true,
+      "RuntimeVerified": true,
+      "RequiresFullWindowsVM": false,
+      "RestartNeeded": false,
+      "Blocked": false,
+      "ExitCode": 0,
+      "GuestUpdateSourceAdjusted": true,
+      "RestoredComponentCount": 37
+    },
+    "InitialInstallValidated": true,
+    "InitialUninstallValidated": true,
+    "CleanBaselineVerified": true,
+    "SilentReinstallValidated": true,
+    "SilentUninstallValidated": true,
+    "PostUninstallDetected": false,
+    "ValidationError": null,
+    "SourceHashUnchanged": true
+  },
+  "RemainingSandboxEnvironments": 0
+}

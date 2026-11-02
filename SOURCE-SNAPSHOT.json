@@ -1,0 +1,10 @@
+{
+    "InformationalVersion":  "0.12.10-sandbox-netfx3-fix-20261101",
+    "BaseVersion":  "0.12.10",
+    "PublishedRelease":  false,
+    "SourceOnly":  true,
+    "CleanStagedBuildPassed":  true,
+    "AutomatedAcceptanceChecks":  747,
+    "LiveAnalyzerResponseRecordingValidated":  false,
+    "CreatedAt":  "2026-11-01T18:14:02.6665015-05:00"
+}
