@@ -15,6 +15,8 @@ public static class ValidationReportGenerator
         sb.AppendLine("==========");
         sb.AppendLine($"Installer: {analysis.Installer ?? "Unknown"}");
         sb.AppendLine($"Captured: {analysis.CapturedAt ?? "Unknown"}");
+        if (analysis.ComponentDeployment is not null)
+            sb.AppendLine($"[INFO] Component recipe: {analysis.ComponentDeployment.Recipe}; {analysis.ComponentDeployment.Files.Count} required payload files. Export the complete Datto kit, including prerequisites.");
         foreach (var action in analysis.MsiRemovalUiActions)
             sb.AppendLine($"[INFO] MSI-authored removal dialog action: {action.Action}; condition: {action.Condition}. This is diagnostic evidence, not permission to force internal properties.");
         sb.AppendLine(LifecycleValidationService.IsComplete(analysis) ? "[PASS] Complete clean lifecycle proved." : "[WARN] Complete clean lifecycle not proved.");

@@ -10,7 +10,7 @@ using InstallerAnalyzer.Services;
 
 internal static class LiveCancellationChecks
 {
-    public static int Run(string root, string installer, bool afterLaunch)
+    public static int Run(string root, string installer, bool afterLaunch, bool recording = false)
     {
         if (SandboxIssRecorder.IsEnvironmentRunning() != false) throw new InvalidOperationException("Cancellation test requires empty Sandbox state.");
         var temp = Path.Combine(Path.GetTempPath(), "InstallerAnalyzer"); Directory.CreateDirectory(temp);
@@ -33,13 +33,15 @@ internal static class LiveCancellationChecks
                 var session = Directory.GetDirectories(temp).Where(p => !previous.Contains(p)).OrderByDescending(Directory.GetCreationTimeUtc).FirstOrDefault();
                 if (session is not null)
                 {
-                    if (afterLaunch)
+                    if (afterLaunch || recording)
                     {
                         var checkpoint = Path.Combine(session, "Output", "install-analysis.checkpoint.json");
                         try
                         {
                             using var json = JsonDocument.Parse(AnalysisArtifactReader.ReadText(checkpoint));
-                            reached = json.RootElement.TryGetProperty("WorkflowStage", out var stage) && (stage.GetString()?.Contains("Process.Start returned PID") ?? false);
+                            reached = json.RootElement.TryGetProperty("WorkflowStage", out var stage) &&
+                                (recording ? stage.GetString()=="Record InstallShield installation response file" && File.Exists(Path.Combine(root,"recording-window-observed.flag"))
+                                           : (stage.GetString()?.Contains("Process.Start returned PID") ?? false));
                         }
                         catch (Exception ex) when (ex is IOException or JsonException) { }
                     }
@@ -47,7 +49,7 @@ internal static class LiveCancellationChecks
                 }
                 if (reached || DateTime.UtcNow - start > TimeSpan.FromMinutes(3))
                 {
-                    Console.WriteLine(reached ? "Reached cancellation phase: " + (afterLaunch ? "installer launched" : "Sandbox startup") : "Cancellation phase deadline reached");
+                    Console.WriteLine(reached ? "Reached cancellation phase: " + (recording ? "Full Analysis response recording, wizard observed" : afterLaunch ? "installer launched" : "Sandbox startup") : "Cancellation phase deadline reached");
                     Invoke("StopTests_Click", window, new RoutedEventArgs()); requested = true;
                 }
             }
@@ -69,7 +71,7 @@ internal static class LiveCancellationChecks
             catch (Exception ex) { Console.Error.WriteLine(ex); }
             finally { window.Close(); app.Shutdown(result); }
         };
-        app.Dispatcher.BeginInvoke(new Action(async () => { await (Task<bool>)Invoke("RefreshTestQueue")!; Field<ComboBox>("TestTypeBox").SelectedIndex = 1; Invoke("StartTests_Click", window, new RoutedEventArgs()); timer.Start(); }));
+        app.Dispatcher.BeginInvoke(new Action(async () => { await (Task<bool>)Invoke("RefreshTestQueue")!; Field<ComboBox>("TestTypeBox").SelectedIndex = recording ? 0 : 1; Invoke("StartTests_Click", window, new RoutedEventArgs()); timer.Start(); }));
         app.Run(); return result;
     }
 }

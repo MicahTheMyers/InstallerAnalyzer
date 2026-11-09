@@ -27,12 +27,23 @@ internal static class Program
     {
         var root = Path.GetFullPath(args[0]);
         Directory.CreateDirectory(root);
+        if(args.Length>=4 && args[1]=="--recording-catalog-check") return RecordingCatalogChecks.Run(root,args[2],args[3],false);
+        if(args.Length>=4 && args[1]=="--recover-recording-catalog") return RecordingCatalogChecks.Run(root,args[2],args[3],true);
+        if(args.Length>=4 && args[1]=="--component-catalog-check") return ComponentCatalogChecks.SavedProof(root,args[2],args[3],false);
+        if(args.Length>=4 && args[1]=="--recover-gint-catalog") return ComponentCatalogChecks.SavedProof(root,args[2],args[3],true);
+        if(args.Length>=4 && args[1]=="--prepare-gint-datto-live") return GintComponentChecks.PrepareDatto(root,args[2],args[3]);
+        if(args.Length>=3 && args[1]=="--gint-component-live") return GintComponentChecks.Live(root,args[2]);
+        if(args.Length>=3 && args[1]=="--gint-netfx3") return GintNetFx3Checks.Run(root,args[2]);
+        if(args.Length>=4 && args[1]=="--prepare-datto-live") return DattoRmmLiveChecks.Prepare(root,args[2],args[3]);
+        if(args.Length>=4 && args[1]=="--prepare-recorded-deployment") return RecordedDeploymentChecks.Prepare(root,args[2],args[3]);
         if(args.Length>=2 && args[1]=="--netfx3-stage") { NetFx3SandboxSource.Stage(root); return 0; }
+        if(args.Length>=2 && args[1]=="--sandbox-compatibility-live") return NetFx3LifecycleChecks.Run(root, true);
         if(args.Length>=2 && args[1]=="--netfx3-lifecycle") return NetFx3LifecycleChecks.Run(root);
         if(args.Length>=2 && args[1]=="--startup-profile") return StartupPerformanceChecks.Run(root);
         if(args.Length>=2 && args[1]=="--startup-live") return SandboxStartupLiveChecks.Run(root);
         if(args.Length>=3 && args[1]=="--recording-startup-live") return SandboxStartupLiveChecks.RunRecordingLaunch(root,args[2]);
         if(args.Length>=3 && args[1]=="--live-full-runner") return LiveRunnerChecks.Run(root,args[2],silentOnly:false);
+        if(args.Length>=3 && args[1]=="--live-cancel-recording") return LiveCancellationChecks.Run(root,args[2],afterLaunch:false,recording:true);
         if(args.Length>=3 && args[1]=="--condition-oracle") return ConditionOracleChecks.Run(root,args[2]);
         if (args.Length >= 2 && args[1] == "--signed-untrusted") return RealSignedUpdateChecks.RunUntrusted(root);
         if (args.Length >= 3 && args[1] == "--signed-handoff") return RealSignedUpdateChecks.Run(root, args[2]);
@@ -43,6 +54,25 @@ internal static class Program
         if (args.Length >= 3 && args[1] == "--live-runner") return LiveRunnerChecks.Run(root, args[2]);
         try
         {
+            var msixRoot = Directory.CreateDirectory(Path.Combine(root, "msix-attachments")).FullName;
+            var msixPath = Path.Combine(msixRoot, "app.msixbundle");
+            File.WriteAllText(msixPath, "fixture app");
+            var dependencyFolder = Directory.CreateDirectory(msixPath + MsixDependencyService.Suffix).FullName;
+            var dependencyPath = Path.Combine(dependencyFolder, "framework.appx");
+            File.WriteAllText(dependencyPath, "fixture framework");
+            var dependency = new MsixDependency("framework.appx", MsixDependencyService.Hash(dependencyPath));
+            Check(InstallerQueueScanner.Scan(msixRoot, CancellationToken.None).SequenceEqual(new[] { msixPath }),
+                "An MSIX attachment is queued only with its primary package");
+            Check(MsixDependencyService.Matches(msixPath, new[] { dependency }), "MSIX dependency hash matches the recorded evidence");
+            var msixProof = new InstallAnalysis { MsixDependencies = [dependency] };
+            var msixScript = ImmyBotScriptGenerator.Generate(new AnalysisResult { Kind = InstallerKind.Msix, FilePath = msixPath }, "", "App", msixProof);
+            Check(msixScript.Contains("-DependencyPath") && msixScript.Contains(dependency.Sha256), "MSIX script verifies its attachment before installation");
+            var msixZip = Path.Combine(root, "msix-fixture.zip");
+            ImmyBotPackageExporter.Export(msixZip, msixPath, null, null, msixProof.MsixDependencies);
+            using (var archive = System.IO.Compression.ZipFile.OpenRead(msixZip))
+                Check(archive.Entries.Any(entry => entry.FullName.Replace('\\', '/') == "app.msixbundle.dependencies/framework.appx"), "MSIX export includes the validated framework attachment");
+            File.AppendAllText(dependencyPath, "changed");
+            Check(!MsixDependencyService.Matches(msixPath, msixProof.MsixDependencies), "Changed MSIX dependency invalidates the catalog match");
             Check(Classification(Item("A"), Item("A")) == "UNCHANGED PASS", "Pass remains pass");
             Check(Classification(Item("A", "FAIL"), Item("A")) == "IMPROVED", "Failed installer improves");
             Check(Classification(Item("A"), Item("A", "FAIL")) == "REGRESSION", "Passed installer regresses");
@@ -195,10 +225,18 @@ internal static class Program
             RegressionInteractionChecks.Run(window, root, Check);
             ApplicationLogoChecks.Run(root, Check);
             NetFx3Checks.Run(root, Check);
+            SandboxCompatibilityChecks.Run(window, root, Check);
+            GintComponentChecks.Run(window, root, Check);
+            ComponentCatalogChecks.Ui(window, Check);
+            RecordingCatalogChecks.Ui(window, Check);
             PerformanceChecks.Run(window, root, Check);
             ClaudeAssistantChecks.Run(window, root, Check);
             RoadmapUiChecks.Run(window, root, Check);
             WindowBoundsChecks.Run(window, root, Check);
+            BentleyBootstrapperChecks.Run(root, Check);
+            BentleyTargetUiChecks.Run(window, Check);
+            AppControlChildChecks.Run(Check);
+            DattoRmmChecks.Run(window, root, Check);
             window.Close();
             Console.WriteLine($"RESULT: {passed} passed, 0 failed");
             return 0;

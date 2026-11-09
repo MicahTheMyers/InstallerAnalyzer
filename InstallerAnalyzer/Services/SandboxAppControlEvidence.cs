@@ -35,9 +35,11 @@ function Convert-AppControlEvent([string]$xml,[string]$sourceImage,[string]$devi
     return [PSCustomObject]@{EventId=3077;Provider='Microsoft-Windows-CodeIntegrity';ObservedAt=$at.ToUniversalTime().ToString('o');ParentImage=$sourceImage;BlockedFile=$blocked;PolicyId=$policy;PolicyName=$policyName;Correlation='Exact source process image'}
   }catch{return $null}finally{if($null -ne $reader){$reader.Dispose()}}
 }
-function Get-AppControlEvidence {
+function Get-AppControlEvidence([string[]]$observedImages=@()) {
   $end=[DateTimeOffset]::UtcNow; $start=([DateTimeOffset]$StartedAt).ToUniversalTime()
   $capture=[ordered]@{Status='Unavailable';StartedAt=$start.ToString('o');CapturedAt=$end.ToString('o');Scope='Bounded read-only Code Integrity 3077 events for the exact source process image. Child-process blocks are not inferred; no captured event does not establish unrestricted execution.';Blocks=@()}
+  $childMode=@($observedImages).Count -gt 0
+  if($childMode){$capture.Scope="Bounded read-only enforced events matched to exact executable images observed in the tracked bootstrapper descendant tree. No audit or unrelated-process blocks are inferred."}
   $eventReader=$null
   try {
     if(-not ('InstallerAnalyzerPolicyPath' -as [type])){
@@ -49,8 +51,13 @@ public static class InstallerAnalyzerPolicyPath {
 }
 '@ -ErrorAction Stop
     }
-    $deviceRoot=[InstallerAnalyzerPolicyPath]::Resolve([IO.Path]::GetPathRoot($Installer).TrimEnd('\'))
-    $deviceImage=if($deviceRoot){$deviceRoot+$Installer.Substring(2)}else{''}
+    $images=if($childMode){@($observedImages | Select-Object -First 32)}else{@($Installer)}
+    $parents=@{}
+    foreach($image in $images){
+      if($image -notmatch '^[a-zA-Z]:\\' -or [IO.Path]::GetExtension($image) -ine '.exe'){continue}
+      $deviceRoot=[InstallerAnalyzerPolicyPath]::Resolve([IO.Path]::GetPathRoot($image).TrimEnd('\'))
+      $parents[$image]=if($deviceRoot){$deviceRoot+$image.Substring(2)}else{''}
+    }
     $xpath="*[System[(EventID=3077) and TimeCreated[@SystemTime >= '"+$start.ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ')+"']]]"
     $query=New-Object System.Diagnostics.Eventing.Reader.EventLogQuery('Microsoft-Windows-CodeIntegrity/Operational',[System.Diagnostics.Eventing.Reader.PathType]::LogName,$xpath)
     $query.ReverseDirection=$true
@@ -61,8 +68,14 @@ public static class InstallerAnalyzerPolicyPath {
       $entry=$eventReader.ReadEvent([TimeSpan]::FromMilliseconds(100))
       if($null -eq $entry){break}
       try {
-        $block=Convert-AppControlEvent $entry.ToXml() $Installer $deviceImage $start $end
-        if($null -ne $block){$capture.Blocks+=@($block)}
+        $xml=$entry.ToXml()
+        foreach($image in $parents.Keys){
+          $block=Convert-AppControlEvent $xml $image $parents[$image] $start $end
+          if($null -ne $block){
+            if($childMode){$block.Correlation='Exact observed bootstrapper descendant image'}
+            $capture.Blocks+=@($block);break
+          }
+        }
       }finally{$entry.Dispose()}
       if($index -eq 63){$capture.Status='Partial'}
     }
@@ -72,6 +85,15 @@ public static class InstallerAnalyzerPolicyPath {
 function Complete-AppControlEvidence {
   $capture=Get-AppControlEvidence
   $result['AppControl']=$capture
+  $children=@($result.BootstrapperObservedImages | Where-Object {$_ -and $_ -ine $Installer} | Select-Object -Unique -First 32)
+  if($children.Count -gt 0){
+    $childCapture=Get-AppControlEvidence -observedImages $children
+    $result['BootstrapperChildAppControl']=$childCapture
+    try {Write-JsonAtomic 'C:\InstallerOutput\bootstrapper-child-app-control.json' $childCapture}catch{}
+    if($childCapture.Status -in @('Available','Partial') -and @($childCapture.Blocks).Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($result.ValidationError)){
+      $result.ValidationError=('APPLICATION CONTROL BLOCKED: Windows recorded an enforced block of '+$childCapture.Blocks[0].BlockedFile+' loaded by an observed installer child. '+$result.ValidationError)
+    }
+  }
   try {Write-JsonAtomic 'C:\InstallerOutput\app-control-evidence.json' $capture}catch{}
   if($capture.Status -in @('Available','Partial') -and @($capture.Blocks).Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($result.ValidationError)){
     $result.ValidationError=('APPLICATION CONTROL BLOCKED: Windows recorded an enforced block of '+$capture.Blocks[0].BlockedFile+'. '+$result.ValidationError)

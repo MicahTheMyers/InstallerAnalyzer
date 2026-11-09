@@ -57,6 +57,7 @@ public sealed class RegressionRun
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Version { get; set; } = "";
     public string Mode { get; set; } = "";
+    public bool SandboxInstallerCompatibility { get; set; }
     public DateTimeOffset Started { get; set; } = DateTimeOffset.Now;
     public DateTimeOffset? Completed { get; set; }
     public bool Stopped { get; set; }

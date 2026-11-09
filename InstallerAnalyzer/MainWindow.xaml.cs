@@ -57,7 +57,6 @@ public partial class MainWindow : Window
     private string? _lastSandboxStageSignature;
     private DateTime? _analysisResultFirstSeenAt;
     private bool _hostValidatedCheckpointPromoted;
-    private static readonly TimeSpan SandboxOverallTimeout = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan SandboxInactivityTimeout = TimeSpan.FromMinutes(12);
     private readonly DispatcherTimer _sandboxWindowTimer = new() { Interval = TimeSpan.FromMilliseconds(600) };
     private readonly Stopwatch _sandboxElapsed = new();
@@ -90,6 +89,8 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        AboutVersionText.Text = "Version " + UpdateService.CurrentDisplayVersion;
+        FooterVersionText.Text = "v" + UpdateService.CurrentDisplayVersion;
         InitializeWindowBounds();
         var workArea = SystemParameters.WorkArea;
         MinHeight = Math.Min(MinHeight, workArea.Height);
@@ -159,7 +160,8 @@ public partial class MainWindow : Window
             ScriptView.Uninstall => ImmyBotScriptGenerator.GenerateUninstall(_selectedUninstallEntry, ProductBox.Text, _installAnalysis),
             ScriptView.Intelligence => IntelligenceReportService.Generate(_result, _installAnalysis),
             ScriptView.Validation => ValidationReportGenerator.Generate(_installAnalysis, _selectedUninstallEntry, ProductBox.Text),
-            _ => ImmyBotScriptGenerator.Generate(_result, EffectiveSilentArguments(), ProductBox.Text)
+            _ when VirtualBoxReducedProfile.IsProfile(_installAnalysis) => "# VirtualBox requires its MSI cabinet and Visual C++ attachments. Deployment export for this profile needs separate validation.",
+            _ => _installAnalysis?.ComponentDeployment is not null ? "# Select Deployment > Datto RMM to generate the complete component recipe and prerequisite attachments." : ImmyBotScriptGenerator.Generate(_result, EffectiveSilentArguments(), ProductBox.Text, _installAnalysis)
         };
         SetHighlightedScript(script);
         UpdateImmyBotPage();
@@ -321,7 +323,7 @@ public partial class MainWindow : Window
             try
             {
                 session = SandboxIssRecorder.Start(installerPath, staticResult.Kind, staticResult.NeedsIss,
-                    staticResult.SuggestedArguments ?? string.Empty, string.Empty, BlockBundledMcAfeeToggle.IsChecked == true, silentOnly);
+                    staticResult.SuggestedArguments ?? string.Empty, string.Empty, BlockBundledMcAfeeToggle.IsChecked == true, silentOnly, PrepareNetFx3Check.IsChecked == true, _activeRegressionRun?.SandboxInstallerCompatibility ?? SandboxCompatibilityCheck.IsChecked == true);
                 lastSession = session;
                 await SandboxStartupMonitor.WaitAsync(session, token, (elapsed, state) =>
                 {
@@ -396,9 +398,11 @@ public partial class MainWindow : Window
                 var arguments = ArgumentsBox.Text?.Trim() ?? string.Empty;
                 var additional = AdditionalArgumentsBox.Text?.Trim() ?? string.Empty;
                 var blockBundled = BlockBundledMcAfeeToggle.IsChecked == true;
+                var prepareNetFx3 = PrepareNetFx3Check.IsChecked == true;
+                var installerCompatibility = SandboxCompatibilityCheck.IsChecked == true;
                 await Task.Run(EnsurePreviousSandboxSessionClosed);
                 if (_stopSandboxRequested) { SandboxRunStatus.Text = "Analysis stopped"; StatusText.Text = "Sandbox startup stopped by user"; return; }
-                _issSession = await Task.Run(() => SandboxIssRecorder.Start(path, kind, needsIss, arguments, additional, blockBundled));
+                _issSession = await Task.Run(() => SandboxIssRecorder.Start(path, kind, needsIss, arguments, additional, blockBundled, prepareNetFx3: prepareNetFx3, installerCompatibility: installerCompatibility));
                 _sandboxStarting = false;
                 if (_stopSandboxRequested) { await StopSandboxSessionAsync(); return; }
                 _sandboxWindow = IntPtr.Zero;
@@ -462,7 +466,7 @@ public partial class MainWindow : Window
         // v0.11.41 host-side activity-aware hang protection. The generated analysis script
         // writes a lightweight heartbeat while discovery/install/process monitoring is active.
         // Twelve minutes with no heartbeat/checkpoint activity is considered stalled, while a
-        // 30-minute absolute ceiling remains as the final emergency guardrail.
+        // The session-wide ceiling remains as the final emergency guardrail.
         if (!_analysisLoaded)
         {
             if (File.Exists(_issSession.CheckpointPath) && _sandboxCheckpointFirstSeen is null)
@@ -541,13 +545,13 @@ public partial class MainWindow : Window
             }
             catch { }
 
-            var overallTimedOut = DateTime.Now - _issSession.StartedAt >= SandboxOverallTimeout;
+            var overallTimedOut = DateTime.Now - _issSession.StartedAt >= _issSession.OverallTimeout;
             var inactivityTimedOut = _sandboxLastActivityAt is DateTime lastActivity &&
                                      DateTime.Now - lastActivity >= SandboxInactivityTimeout;
             if (overallTimedOut || inactivityTimedOut)
             {
                 FinalizeTimedOutSandboxRun(overallTimedOut
-                    ? "Sandbox analysis exceeded the 30-minute absolute safety limit."
+                    ? $"Sandbox analysis exceeded the {_issSession.OverallTimeout.TotalMinutes:0}-minute absolute safety limit."
                     : "Sandbox analysis produced no heartbeat or checkpoint activity for 12 minutes.");
                 return;
             }
@@ -599,8 +603,8 @@ public partial class MainWindow : Window
         }
 
         ApplyValidatedInstallArguments();
-        _issTimer.Stop(); StopSandboxElapsedTime(); UpdateSandboxDashboard(); SandboxRunStatus.Text = "Analysis complete";
-        SandboxRunDetails.Text = _selectedUninstallEntry is null ? "Sandbox completed. No primary application was identified." : $"Detected {_selectedUninstallEntry.DisplayName} {_selectedUninstallEntry.DisplayVersion}. Installation analysis captured.";
+        _issTimer.Stop(); StopSandboxElapsedTime(); UpdateSandboxDashboard(); SandboxRunStatus.Text = CompletedSandboxStatus;
+        SandboxRunDetails.Text = !string.IsNullOrWhiteSpace(_installAnalysis?.ValidationError) ? "Validation failed: " + _installAnalysis.ValidationError : _selectedUninstallEntry is null ? "Sandbox completed. No primary application was identified." : $"Detected {_selectedUninstallEntry.DisplayName} {_selectedUninstallEntry.DisplayVersion}. Installation analysis captured.";
         StopSandboxButton.IsEnabled = false;
         StartSandboxButton.IsEnabled = _installerPath is not null;
         if (AutoCloseSandboxToggle.IsChecked == true)
@@ -621,6 +625,7 @@ public partial class MainWindow : Window
             IssCheck.IsChecked = false; IssStatusText.Text = "Installation analysis captured. This installer strategy does not require setup.iss.";
             StatusText.Text = _selectedUninstallEntry is null ? "Installation analysis captured" : "Installed application identified";
         }
+        if (!string.IsNullOrWhiteSpace(_installAnalysis?.ValidationError)) StatusText.Text = "Analysis failed — diagnostics captured";
         _scriptView = ScriptView.Install; Generate();
         SaveHistorySnapshot();
         var details = _selectedUninstallEntry is null ? "No new uninstall registry entry was identified." : $"Detected: {_selectedUninstallEntry.DisplayName} {_selectedUninstallEntry.DisplayVersion}\n\nDetection, Uninstall, and Validation results are now available.";
@@ -682,9 +687,19 @@ public partial class MainWindow : Window
         SaveHistorySnapshot();
     }
 
+    private string CompletedSandboxStatus => !string.IsNullOrWhiteSpace(_installAnalysis?.ValidationError) ? "Analysis failed" : _installAnalysis is not null && LifecycleValidationService.IsComplete(_installAnalysis) ? "Analysis complete — validated" : "Analysis finished — validation incomplete";
+
     private UninstallEntry? ChooseBestEntry(List<UninstallEntry> entries)
     {
+        if (_installAnalysis?.ExpectedPrimaryProduct == AdobeReaderInstaller.DesktopProduct)
+            entries = entries.Where(AdobeReaderInstaller.IsDesktopEntry).ToList();
+        else if (!string.IsNullOrWhiteSpace(_installAnalysis?.ExpectedPrimaryProduct))
+        {
+            var pattern = @"(?:^|[^a-z0-9])" + System.Text.RegularExpressions.Regex.Escape(_installAnalysis.ExpectedPrimaryProduct.Trim()) + @"(?:$|[^a-z0-9])";
+            entries = entries.Where(e => System.Text.RegularExpressions.Regex.IsMatch(e.DisplayName ?? "", pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase) && (e.Publisher ?? "").StartsWith("Bentley Systems", StringComparison.OrdinalIgnoreCase)).ToList();
+        }
         if (entries.Count == 0) return null;
+        if (_installAnalysis?.PrimaryKey is { Length: > 0 } primaryKey && entries.FirstOrDefault(e => e.Key == primaryKey) is { } exact) return exact;
 
         var expectedNames = new[]
         {
@@ -819,18 +834,25 @@ public partial class MainWindow : Window
 
     private void AnalyzeNav_Click(object sender, RoutedEventArgs e) => ShowPage(AnalyzePage);
     private void SandboxNav_Click(object sender, RoutedEventArgs e) { UpdateSandboxPage(); ShowPage(SandboxPage); }
-    private void ImmyBotNav_Click(object sender, RoutedEventArgs e) { UpdateImmyBotPage(); ShowPage(ImmyBotPage); }
+    private void DeploymentNav_Click(object sender, RoutedEventArgs e) => ShowPage(DeploymentPage);
     private void HistoryNav_Click(object sender, RoutedEventArgs e) { RefreshHistory(); ShowPage(HistoryPage); }
     private async void TestModeNav_Click(object sender, RoutedEventArgs e) { ShowPage(TestModePage); await RefreshTestQueue(); RefreshRunHistory(); }
     private void SettingsNav_Click(object sender, RoutedEventArgs e) { RefreshSandboxSettings(); ShowPage(SettingsPage); }
     private void AboutNav_Click(object sender, RoutedEventArgs e) => ShowPage(AboutPage);
     private void ShowPage(UIElement page)
     {
+        if (ReferenceEquals(page, DeploymentPage)) page = DeploymentTargetBox.SelectedIndex == 1 ? DattoPage : ImmyBotPage;
+        bool deployment = ReferenceEquals(page, ImmyBotPage) || ReferenceEquals(page, DattoPage);
+        DeploymentPage.Visibility = deployment ? Visibility.Visible : Visibility.Collapsed;
+        if (deployment) DeploymentTargetBox.SelectedIndex = ReferenceEquals(page, DattoPage) ? 1 : 0;
+        DattoPage.Visibility = Visibility.Collapsed;
         CatalogPage.Visibility = Visibility.Collapsed; AnalyzePage.Visibility = Visibility.Collapsed; SandboxPage.Visibility = Visibility.Collapsed; ImmyBotPage.Visibility = Visibility.Collapsed; HistoryPage.Visibility = Visibility.Collapsed; TestModePage.Visibility = Visibility.Collapsed; SettingsPage.Visibility = Visibility.Collapsed; AboutPage.Visibility = Visibility.Collapsed;
         page.Visibility = Visibility.Visible;
-        foreach (var b in new[] { CatalogNavButton, AnalyzeNavButton, SidebarSandboxButton, ImmyBotNavButton, HistoryNavButton, TestModeNavButton, SettingsNavButton, AboutNavButton }) b.Background = Brushes.Transparent;
-        var active = ReferenceEquals(page, CatalogPage) ? CatalogNavButton : ReferenceEquals(page, AnalyzePage) ? AnalyzeNavButton : ReferenceEquals(page, SandboxPage) ? SidebarSandboxButton : ReferenceEquals(page, ImmyBotPage) ? ImmyBotNavButton : ReferenceEquals(page, HistoryPage) ? HistoryNavButton : ReferenceEquals(page, TestModePage) ? TestModeNavButton : ReferenceEquals(page, SettingsPage) ? SettingsNavButton : AboutNavButton;
+        foreach (var b in new[] { CatalogNavButton, AnalyzeNavButton, SidebarSandboxButton, DeploymentNavButton, HistoryNavButton, TestModeNavButton, SettingsNavButton, AboutNavButton }) b.Background = Brushes.Transparent;
+        var active = ReferenceEquals(page, CatalogPage) ? CatalogNavButton : ReferenceEquals(page, AnalyzePage) ? AnalyzeNavButton : ReferenceEquals(page, SandboxPage) ? SidebarSandboxButton : ReferenceEquals(page, ImmyBotPage) ? DeploymentNavButton : ReferenceEquals(page, HistoryPage) ? HistoryNavButton : ReferenceEquals(page, TestModePage) ? TestModeNavButton : ReferenceEquals(page, SettingsPage) ? SettingsNavButton : AboutNavButton;
+        if (ReferenceEquals(page, DattoPage)) active=DeploymentNavButton;
         active.Background = (Brush)Resources["AccentSoft"];
+        if (deployment) { if (ReferenceEquals(page, DattoPage)) UpdateDattoPage(); else UpdateImmyBotPage(); }
         UpdateAiAssistVisibility();
     }
 
@@ -970,7 +992,7 @@ public partial class MainWindow : Window
         }
 
         var confidence = DeploymentConfidenceService.Calculate(_result, _installAnalysis, _selectedUninstallEntry);
-        var ready = _installerPath is not null && confidence.Score == 100;
+        var ready = _installAnalysis?.ComponentDeployment is null && !VirtualBoxReducedProfile.IsProfile(_installAnalysis) && _installerPath is not null && confidence.Score == 100;
         DeploymentReadinessText.Text = confidence.Status;
         DeploymentConfidenceText.Text = $"Deployment Confidence: {confidence.Score}%";
         DeploymentConfidenceList.ItemsSource = confidence.Checks;
@@ -988,6 +1010,8 @@ public partial class MainWindow : Window
 
     private void ExportImmyBot_Click(object sender, RoutedEventArgs e)
     {
+        if (_installAnalysis?.ComponentDeployment is not null) { StatusText.Text = "Select Datto RMM to export this component recipe."; return; }
+        if (VirtualBoxReducedProfile.IsProfile(_installAnalysis)) { StatusText.Text = "VirtualBox attachment export needs separate validation."; return; }
         if (_installerPath is null || _result is null || _selectedUninstallEntry is null || _installAnalysis is null) return;
         if (!_installAnalysis.SilentUninstallValidated)
         {
@@ -1000,7 +1024,7 @@ public partial class MainWindow : Window
         if (d.ShowDialog() != true) return;
         try
         {
-            ImmyBotPackageExporter.Export(d.FileName, _installerPath, _issSession?.OutputFolder, _logoPath);
+            ImmyBotPackageExporter.Export(d.FileName, _installerPath, _issSession?.OutputFolder, _logoPath, _installAnalysis.MsixDependencies);
             StatusText.Text = "ImmyBot package exported";
             MessageBox.Show($"ImmyBot package created successfully.\n\n{d.FileName}", "ImmyBot export", MessageBoxButton.OK, MessageBoxImage.Information);
         }
@@ -1009,15 +1033,18 @@ public partial class MainWindow : Window
 
     private void UpdateImmyBotPage()
     {
+        if (DattoPage?.Visibility == Visibility.Visible) UpdateDattoPage();
         if (ImmyInstallBox is null) return;
-        var install = _result is null ? "# Select an installer on the Analyze page." : ImmyBotScriptGenerator.Generate(_result, EffectiveSilentArguments(), ProductBox.Text);
+        var install = VirtualBoxReducedProfile.IsProfile(_installAnalysis)
+            ? "# VirtualBox requires its MSI cabinet and Visual C++ attachments. Deployment export for this profile needs separate validation."
+            : _installAnalysis?.ComponentDeployment is not null ? "# This component recipe requires its prerequisite attachments. Select Datto RMM to export the complete kit." : _result is null ? "# Select an installer on the Analyze page." : ImmyBotScriptGenerator.Generate(_result, EffectiveSilentArguments(), ProductBox.Text, _installAnalysis);
         var detection = _result is null ? "# Sandbox analysis is required." : ImmyBotScriptGenerator.GenerateDetection(_selectedUninstallEntry, ProductBox.Text);
         var uninstall = _result is null ? "# Sandbox analysis is required." : ImmyBotScriptGenerator.GenerateUninstall(_selectedUninstallEntry, ProductBox.Text, _installAnalysis);
         SetHighlightedScript(ImmyInstallBox, install);
         SetHighlightedScript(ImmyDetectionBox, detection);
         SetHighlightedScript(ImmyUninstallBox, uninstall);
         LoadLogoPreview();
-        var ready = _installerPath is not null && _selectedUninstallEntry is not null && LifecycleValidationService.IsComplete(_installAnalysis);
+        var ready = _installAnalysis?.ComponentDeployment is null && !VirtualBoxReducedProfile.IsProfile(_installAnalysis) && _installerPath is not null && _selectedUninstallEntry is not null && LifecycleValidationService.IsComplete(_installAnalysis);
         ImmyExportButton.IsEnabled = ready;
         UpdateDeploymentIntelligence(ready, install, detection, uninstall);
     }
@@ -1037,7 +1064,7 @@ public partial class MainWindow : Window
     private void SaveHistorySnapshot()
     {
         if (_result is null || string.IsNullOrWhiteSpace(_installerPath)) return;
-        try { InstallerCatalogService.Remember(_result, _installAnalysis); } catch (Exception ex) { StatusText.Text = "Catalog save failed: " + ex.Message; }
+        try { if (InstallerCatalogService.Remember(_result, _installAnalysis, responseFolder: _issSession?.OutputFolder) && CatalogPage.Visibility == Visibility.Visible) _ = RefreshCatalogAsync(); } catch (Exception ex) { StatusText.Text = "Catalog save failed: " + ex.Message; }
         var best = DeploymentIntelligenceService.RankDetection(_selectedUninstallEntry).FirstOrDefault();
         AnalysisHistoryService.Save(new AnalysisHistoryItem
         {
@@ -1236,6 +1263,7 @@ public partial class MainWindow : Window
         {
             Version = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "development",
             Mode = silentOnly ? "SilentOnlyUnattended" : "FullAnalysis",
+            SandboxInstallerCompatibility = SandboxCompatibilityCheck.IsChecked == true,
             Started = startedAt,
             Tests = selected.Select(item => new RegressionTestRecord { Installer = item.FileName, InstallerPath = item.Path }).ToList()
         };
@@ -1281,7 +1309,7 @@ public partial class MainWindow : Window
                 hostStage = "Sandbox lifecycle";
                 RegisterAiDiagnosticTarget(item.Path, item.FileName + " • current run", session.OutputFolder);
 
-                var deadline = DateTime.Now + SandboxOverallTimeout;
+                var deadline = DateTime.Now + session.OverallTimeout;
                 DateTime lastActivity = DateTime.Now;
                 DateTime? lastWrite = null;
                 var nextLivenessCheck = DateTime.MinValue;
@@ -1340,7 +1368,7 @@ public partial class MainWindow : Window
                     IntelligenceReportService.Enrich(lifecycle, staticResult, session.OutputFolder);
                     var lifecyclePass = LifecycleValidationService.IsComplete(lifecycle);
                     outcome = lifecyclePass ? "PASS" : "FAIL";
-                    if (lifecyclePass && staticResult is not null) { try { InstallerCatalogService.Remember(staticResult, lifecycle, _nextRunSource); } catch (Exception ex) { catalogWarning = "Catalog save failed: " + ex.Message; } }
+                    if (lifecyclePass && staticResult is not null) { try { if (InstallerCatalogService.Remember(staticResult, lifecycle, _nextRunSource, session.OutputFolder) && CatalogPage.Visibility == Visibility.Visible) _ = RefreshCatalogAsync(); } catch (Exception ex) { catalogWarning = "Catalog save failed: " + ex.Message; } }
                     failure = lifecyclePass ? "" : lifecycle?.ValidationError ?? "Lifecycle validation did not satisfy install + uninstall + final absence requirements.";
                 }
             }
@@ -1395,7 +1423,7 @@ public partial class MainWindow : Window
             {
                 Installer = item.FileName, Result = outcome, InstallerType = staticResult?.Kind.ToString() ?? "Unknown",
                 Confidence = staticResult?.Confidence ?? 0, Architecture = staticResult?.Architecture,
-                ProductName = lifecycle?.NewUninstallEntries.FirstOrDefault()?.DisplayName ?? staticResult?.ProductName,
+                ProductName = historyItem.ProductName,
                 Install = LifecycleValidationService.InstallPassed(lifecycle) ? "PASS" : "FAIL",
                 Uninstall = LifecycleValidationService.UninstallPassed(lifecycle) ? "PASS" : "FAIL",
                 Removal = lifecycle?.PostUninstallDetected == false ? "PASS" : "FAIL",
@@ -1525,7 +1553,7 @@ public partial class MainWindow : Window
             SandboxPreviewImage.Source = null;
             if (_analysisLoaded)
             {
-                SandboxRunStatus.Text = "Analysis complete";
+                SandboxRunStatus.Text = CompletedSandboxStatus;
             }
             else if (string.IsNullOrWhiteSpace(_liveWorkflowStage))
             {
@@ -1618,7 +1646,7 @@ public partial class MainWindow : Window
         SandboxWindowEmbedder.BringToFront(_sandboxWindow);
     }
 
-    private sealed class AppSettings { public bool EnableAiAssist { get; set; } = false; public string AiProvider { get; set; } = "OpenAI"; public string AiOpenAiModel { get; set; } = ""; public string AiOllamaModel { get; set; } = ""; public string AiClaudeModel { get; set; } = ""; public string AiLocalServer { get; set; } = "http://127.0.0.1:11434"; public string SandboxDisplayMode { get; set; } = "Separate"; public bool AutoCloseSandbox { get; set; } = true; public bool AutomaticallyCheckForUpdates { get; set; } = true; public bool BlockBundledMcAfee { get; set; } = true; public bool EnableTestMode { get; set; } = false; public string CustomThemeColor { get; set; } = "#182438"; public string CustomAccentColor { get; set; } = "#3B82F6"; public string Theme { get; set; } = "Dark"; public string AccentColor { get; set; } = "Blue"; }
+    private sealed class AppSettings { public bool SandboxInstallerCompatibility { get; set; } = false; public bool PrepareNetFx3 { get; set; } = false; public bool EnableAiAssist { get; set; } = false; public string AiProvider { get; set; } = "OpenAI"; public string AiOpenAiModel { get; set; } = ""; public string AiOllamaModel { get; set; } = ""; public string AiClaudeModel { get; set; } = ""; public string AiLocalServer { get; set; } = "http://127.0.0.1:11434"; public string SandboxDisplayMode { get; set; } = "Separate"; public bool AutoCloseSandbox { get; set; } = true; public bool AutomaticallyCheckForUpdates { get; set; } = true; public bool BlockBundledMcAfee { get; set; } = true; public bool EnableTestMode { get; set; } = false; public string CustomThemeColor { get; set; } = "#182438"; public string CustomAccentColor { get; set; } = "#3B82F6"; public string Theme { get; set; } = "Dark"; public string AccentColor { get; set; } = "Blue"; }
     private void LoadAppSettings()
     {
         try
@@ -1627,6 +1655,8 @@ public partial class MainWindow : Window
             if (string.Equals(settings?.SandboxDisplayMode, "Integrated", StringComparison.OrdinalIgnoreCase) || string.Equals(settings?.SandboxDisplayMode, "Embedded", StringComparison.OrdinalIgnoreCase)) EmbeddedModeRadio.IsChecked = true;
             else SeparateModeRadio.IsChecked = true;
             AutoCloseSandboxToggle.IsChecked = settings?.AutoCloseSandbox ?? true;
+            PrepareNetFx3Check.IsChecked = settings?.PrepareNetFx3 ?? false;
+            SandboxCompatibilityCheck.IsChecked = settings?.SandboxInstallerCompatibility ?? false;
             AutoUpdateToggle.IsChecked = settings?.AutomaticallyCheckForUpdates ?? true;
             BlockBundledMcAfeeToggle.IsChecked = settings?.BlockBundledMcAfee ?? true;
             EnableTestModeToggle.IsChecked = settings?.EnableTestMode ?? false;
@@ -1660,7 +1690,7 @@ public partial class MainWindow : Window
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
-            File.WriteAllText(SettingsPath, JsonSerializer.Serialize(new AppSettings { SandboxDisplayMode = UseIntegratedViewer ? "Integrated" : "Separate", AutoCloseSandbox = AutoCloseSandboxToggle.IsChecked == true, AutomaticallyCheckForUpdates = AutoUpdateToggle.IsChecked == true, BlockBundledMcAfee = BlockBundledMcAfeeToggle.IsChecked == true, EnableTestMode = EnableTestModeToggle.IsChecked == true, EnableAiAssist = AiIsEnabled, AiProvider = SelectedAiProvider, AiOpenAiModel = _aiOpenAiModel, AiOllamaModel = _aiOllamaModel, AiClaudeModel = _aiClaudeModel, AiLocalServer = AiLocalServerBox.Text.Trim(), CustomThemeColor = _customThemeColor, CustomAccentColor = _customAccentColor, Theme = CustomThemeRadio.IsChecked == true ? "Custom" : LightThemeRadio.IsChecked == true ? "Light" : SuperDarkThemeRadio.IsChecked == true ? "SuperDark" : PurpleThemeRadio.IsChecked == true ? "Purple" : HackerThemeRadio.IsChecked == true ? "Hacker" : "Dark", AccentColor = CustomAccentRadio.IsChecked == true ? "Custom" : PurpleAccentRadio.IsChecked == true ? "Purple" : TealAccentRadio.IsChecked == true ? "Teal" : OrangeAccentRadio.IsChecked == true ? "Orange" : RedAccentRadio.IsChecked == true ? "Red" : GreenAccentRadio.IsChecked == true ? "Green" : PinkAccentRadio.IsChecked == true ? "Pink" : GoldAccentRadio.IsChecked == true ? "Gold" : "Blue" }, new JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(SettingsPath, JsonSerializer.Serialize(new AppSettings { SandboxInstallerCompatibility = SandboxCompatibilityCheck.IsChecked == true, PrepareNetFx3 = PrepareNetFx3Check.IsChecked == true, SandboxDisplayMode = UseIntegratedViewer ? "Integrated" : "Separate", AutoCloseSandbox = AutoCloseSandboxToggle.IsChecked == true, AutomaticallyCheckForUpdates = AutoUpdateToggle.IsChecked == true, BlockBundledMcAfee = BlockBundledMcAfeeToggle.IsChecked == true, EnableTestMode = EnableTestModeToggle.IsChecked == true, EnableAiAssist = AiIsEnabled, AiProvider = SelectedAiProvider, AiOpenAiModel = _aiOpenAiModel, AiOllamaModel = _aiOllamaModel, AiClaudeModel = _aiClaudeModel, AiLocalServer = AiLocalServerBox.Text.Trim(), CustomThemeColor = _customThemeColor, CustomAccentColor = _customAccentColor, Theme = CustomThemeRadio.IsChecked == true ? "Custom" : LightThemeRadio.IsChecked == true ? "Light" : SuperDarkThemeRadio.IsChecked == true ? "SuperDark" : PurpleThemeRadio.IsChecked == true ? "Purple" : HackerThemeRadio.IsChecked == true ? "Hacker" : "Dark", AccentColor = CustomAccentRadio.IsChecked == true ? "Custom" : PurpleAccentRadio.IsChecked == true ? "Purple" : TealAccentRadio.IsChecked == true ? "Teal" : OrangeAccentRadio.IsChecked == true ? "Orange" : RedAccentRadio.IsChecked == true ? "Red" : GreenAccentRadio.IsChecked == true ? "Green" : PinkAccentRadio.IsChecked == true ? "Pink" : GoldAccentRadio.IsChecked == true ? "Gold" : "Blue" }, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch { }
     }
@@ -1810,7 +1840,7 @@ public partial class MainWindow : Window
             soft = Color.FromRgb((byte)(bg.R*0.8+accentRgb.R*0.2),(byte)(bg.G*0.8+accentRgb.G*0.2),(byte)(bg.B*0.8+accentRgb.B*0.2)).ToString();
         }
         SetThemeBrush("Accent", accent); SetThemeBrush("AccentSoft", soft); SetThemeBrush("Link", accent);
-        ShowPage(CatalogPage.Visibility == Visibility.Visible ? CatalogPage : AnalyzePage.Visibility == Visibility.Visible ? AnalyzePage : SandboxPage.Visibility == Visibility.Visible ? SandboxPage : ImmyBotPage.Visibility == Visibility.Visible ? ImmyBotPage : HistoryPage.Visibility == Visibility.Visible ? HistoryPage : TestModePage.Visibility == Visibility.Visible ? TestModePage : SettingsPage.Visibility == Visibility.Visible ? SettingsPage : AboutPage);
+        ShowPage(CatalogPage.Visibility == Visibility.Visible ? CatalogPage : AnalyzePage.Visibility == Visibility.Visible ? AnalyzePage : SandboxPage.Visibility == Visibility.Visible ? SandboxPage : DattoPage.Visibility == Visibility.Visible ? DattoPage : ImmyBotPage.Visibility == Visibility.Visible ? ImmyBotPage : HistoryPage.Visibility == Visibility.Visible ? HistoryPage : TestModePage.Visibility == Visibility.Visible ? TestModePage : SettingsPage.Visibility == Visibility.Visible ? SettingsPage : AboutPage);
     }
 
     private static string ValidColor(string? value, string fallback) => value is not null && Regex.IsMatch(value, "^#[0-9A-Fa-f]{6}$") ? value : fallback;

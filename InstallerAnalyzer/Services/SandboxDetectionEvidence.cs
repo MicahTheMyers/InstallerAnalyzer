@@ -58,10 +58,20 @@ function Get-DetectionBaselinePresence([string]$path,[bool]$IsFile=$false) {
   }
   return $null
 }
+function Resolve-DetectionInstallLocation([string]$folder) {
+  if([string]::IsNullOrWhiteSpace($folder)){return $null}
+  $folder=$folder.Trim()
+  # Some vendors store a quoted directory in InstallLocation, not a command line.
+  if($folder.Length -ge 2 -and $folder.StartsWith('"') -and $folder.EndsWith('"')){$folder=$folder.Substring(1,$folder.Length-2)}
+  try {
+    if($folder.IndexOfAny([IO.Path]::GetInvalidPathChars()) -ge 0 -or $folder -notmatch '^[A-Za-z]:\\'){return $null}
+    return [IO.Path]::GetFullPath($folder).TrimEnd('\')
+  } catch {return $null}
+}
 function Get-InstalledExecutableCandidates([string]$folder) {
   $files=@()
-  if([string]::IsNullOrWhiteSpace($folder) -or -not [IO.Path]::IsPathRooted($folder)){return $files}
-  try{$folder=[IO.Path]::GetFullPath($folder).TrimEnd('\')}catch{return $files}
+  $folder=Resolve-DetectionInstallLocation $folder
+  if([string]::IsNullOrWhiteSpace($folder)){return $files}
   $allowed=@($env:ProgramFiles,([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')),$env:LOCALAPPDATA) | Where-Object {$_}
   if(@($allowed|Where-Object {$folder.StartsWith(($_.TrimEnd('\')+'\'),[StringComparison]::OrdinalIgnoreCase)}).Count -eq 0){return $files}
   $pending=New-Object 'System.Collections.Generic.Stack[object]';$pending.Push([PSCustomObject]@{Path=$folder;Depth=0})
@@ -90,7 +100,7 @@ function Get-InstalledExecutableCandidates([string]$folder) {
 function Add-DetailedDetectionCandidates($entry) {
   if($null -eq $entry){return}
   Add-MsiApplicationRegistryCandidates $entry
-  $location=[string]$entry.InstallLocation
+  $location=Resolve-DetectionInstallLocation ([string]$entry.InstallLocation)
   $candidates=@(Get-InstalledExecutableCandidates $location)
   $product=([string]$entry.DisplayName -replace '[^A-Za-z0-9]','').ToLowerInvariant()
   $publisher=([string]$entry.Publisher).Trim()

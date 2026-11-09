@@ -15,7 +15,7 @@ public static class DiagnosticBundleService
         "install-analysis.json", "install-analysis.checkpoint.json", "regression-result.json",
         "analysis-debug.jsonl", "analysis-heartbeat.txt", "msi-install.log", "msi-uninstall-initial.log", "msi-uninstall-final.log",
         "iss-install-replay.log", "iss-uninstall-replay.log",
-        "sandbox-host-startup.json", "sandbox-guest-startup.json", "sandbox-guest-startup-error.txt",
+        "component-deployment.json", "sandbox-compatibility.json", "sandbox-compatibility-refresh.txt", "sandbox-host-startup.json", "sandbox-guest-startup.json", "sandbox-guest-startup-error.txt",
         "app-control-evidence.json",
         "installer-intelligence.json", "installer-intelligence.txt", "process-snapshot.json", "registry-snapshot.json",
         "strategy-attempts.json", "prerequisite-results.json", "relationship-graph.json", "detection-strategies.json",

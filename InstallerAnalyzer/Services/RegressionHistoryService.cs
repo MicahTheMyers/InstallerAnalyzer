@@ -121,6 +121,7 @@ public sealed partial class RegressionHistoryService
             if (old is null) classification = "NEW";
             else if (!old.Tested || !item.Tested) classification = "REMOVED / NOT TESTED";
             else if (current.Mode != baseline.Mode) { classification = "NOT COMPARABLE"; note = "Different test modes"; }
+            else if (current.SandboxInstallerCompatibility != baseline.SandboxInstallerCompatibility) { classification = "NOT COMPARABLE"; note = "Different Sandbox security settings"; }
             else if ((!item.Passed && item.Failure.Category == FailureCategory.Timeout && item.Failure.Owner == "Unknown") ||
                      (!old.Passed && old.Failure.Category == FailureCategory.Timeout && old.Failure.Owner == "Unknown"))
             { classification = "INCONCLUSIVE"; note = "Timeout cause is unknown; inspect evidence"; }

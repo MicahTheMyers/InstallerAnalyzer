@@ -33,6 +33,7 @@ function Get-NetFx3FeatureState {
   return 'Unknown'
 }
 function Test-NetFx3Runtime {
+  if($script:UseGintPrerequisites){return Test-GintSignedNetFx3Runtime}
   $compiler=$env:WINDIR+'\Microsoft.NET\Framework\v3.5\csc.exe'
   if(-not (Test-Path -LiteralPath $compiler)){return $false}
   $source='C:\InstallerOutput\netfx3-runtime.cs'; $exe='C:\InstallerOutput\netfx3-runtime.exe'

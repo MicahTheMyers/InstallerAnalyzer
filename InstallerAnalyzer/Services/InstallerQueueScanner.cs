@@ -13,7 +13,9 @@ public static class InstallerQueueScanner
                  { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = true }))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (extensions.Contains(Path.GetExtension(path))) files.Add(path);
+            if (extensions.Contains(Path.GetExtension(path)) && !Path.GetRelativePath(folder, path)
+                .Split(Path.DirectorySeparatorChar).SkipLast(1)
+                .Any(part => part.EndsWith(MsixDependencyService.Suffix, StringComparison.OrdinalIgnoreCase))) files.Add(path);
         }
         files.Sort((left, right) =>
         {

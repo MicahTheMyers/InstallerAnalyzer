@@ -20,7 +20,7 @@ public static class MsiLogPropertyService
             if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return Unavailable("Reparse log path not read.");
             return Parse(AnalysisArtifactReader.ReadText(path, Limit), metadata);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or RegexMatchTimeoutException)
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException or RegexMatchTimeoutException)
         { return Unavailable("Log unavailable or exceeds bounded read limits; properties remain unknown."); }
     }
 

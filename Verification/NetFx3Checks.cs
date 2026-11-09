@@ -13,6 +13,8 @@ internal static class NetFx3Checks
         check(NetFx3RequirementService.IsExplicitRequirement("This app requires Microsoft .NET Framework 3.5."), "NetFx3 explicit requirement recognized");
         foreach (var text in new[] { "Missing DLL 0xc0000135", ".NET Framework 4.8 is required", ".NET Framework 3.5 is optional", ".NET Framework 3.5 is not required" })
             check(!NetFx3RequirementService.IsExplicitRequirement(text), "NetFx3 does not infer requirement from: " + text);
+        check(NetFx3RequirementService.Detect("native-installer.exe", new(), true).StartsWith("User-requested Sandbox prerequisite:"), "Explicit Sandbox NetFx3 preflight covers native installers without managed metadata");
+        check(NetFx3RequirementService.Detect("native-installer.exe", new()) == "", "Unrequested native installer does not imply a NetFx3 requirement");
         var metadata = new MsiMetadata { LaunchConditions = new() { new() { Description = "This app requires .NET Framework 3.5", Condition = "NETFRAMEWORK35" } } };
         check(NetFx3RequirementService.Detect("not-a-file", metadata).StartsWith("MSI LaunchCondition:"), "NetFx3 declared MSI preflight evidence is retained");
         var managed = Path.Combine(root,"clr2-fixture.exe");

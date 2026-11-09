@@ -7,7 +7,7 @@ using InstallerAnalyzer.Services;
 
 internal static class NetFx3LifecycleChecks
 {
-    public static int Run(string root)
+    public static int Run(string root, bool installerCompatibility = false)
     {
         string Wsb = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Microsoft","WindowsApps","wsb.exe");
         string[] Ids()
@@ -21,7 +21,7 @@ internal static class NetFx3LifecycleChecks
         var before=RegressionHistoryService.HashFile(fixture);string? owned=null;
         try
         {
-            var session=SandboxIssRecorder.Start(fixture,InstallerKind.Msi,false,"/qn /norestart","",true,true);
+            var session=SandboxIssRecorder.Start(fixture,InstallerKind.Msi,false,"/qn /norestart","",true,true,installerCompatibility: installerCompatibility);
             File.WriteAllText(Path.Combine(root,"session-path.txt"),session.SessionFolder);
             var deadline=DateTime.UtcNow.AddMinutes(20);
             while(DateTime.UtcNow<deadline)
@@ -33,7 +33,7 @@ internal static class NetFx3LifecycleChecks
             if(!File.Exists(session.AnalysisPath))throw new InvalidOperationException("No final lifecycle result");
             File.Copy(session.AnalysisPath,Path.Combine(root,"install-analysis.json"));
             var proof=JsonSerializer.Deserialize<InstallAnalysis>(File.ReadAllText(session.AnalysisPath),new JsonSerializerOptions{PropertyNameCaseInsensitive=true})!;
-            var pass=proof.NetFx3Provisioning.RuntimeVerified && proof.InitialInstallValidated && proof.InitialUninstallValidated && proof.CleanBaselineVerified && proof.SilentReinstallValidated && proof.SilentUninstallValidated && proof.PostUninstallDetected==false;
+            var pass=proof.NetFx3Provisioning.RuntimeVerified && proof.InitialInstallValidated && proof.InitialUninstallValidated && proof.CleanBaselineVerified && proof.SilentReinstallValidated && proof.SilentUninstallValidated && proof.PostUninstallDetected==false && (!installerCompatibility || proof.SandboxCompatibility is { Requested: true, Prepared: true, AfterState: 0, RefreshExitCode: 0 });
             File.WriteAllText(Path.Combine(root,"acceptance.json"),JsonSerializer.Serialize(new{Passed=pass,proof.NetFx3Provisioning,proof.InitialInstallValidated,proof.InitialUninstallValidated,proof.CleanBaselineVerified,proof.SilentReinstallValidated,proof.SilentUninstallValidated,proof.PostUninstallDetected,proof.ValidationError,SourceHashUnchanged=before==RegressionHistoryService.HashFile(fixture)}));
             Console.WriteLine(pass?"PASS production Sandbox NetFx3 provisioning and real MSI install/remove/reinstall/remove fixture":"FAIL lifecycle: "+proof.ValidationError);
             return pass?0:1;

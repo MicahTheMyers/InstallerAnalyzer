@@ -19,12 +19,14 @@ public static class LifecycleValidationService
 
     public static bool IsComplete(InstallAnalysis? proof) => InstallPassed(proof) && UninstallPassed(proof) &&
         (proof!.ValidationSchemaVersion < 3 || proof.EvidenceCollectionComplete) &&
+        (!VirtualBoxReducedProfile.IsProfile(proof) || proof.VirtualBoxDriverCleanupVerified) &&
         IdentityPassed(proof!) && string.IsNullOrWhiteSpace(proof!.ValidationError) &&
         DateTimeOffset.TryParse(proof.CapturedAt, out _);
 
     public static bool CanPromoteCheckpoint(InstallAnalysis? proof) => proof is not null &&
         proof.ValidationSchemaVersion >= 2 && proof.InitialUninstallValidated && proof.CleanBaselineVerified &&
         (proof.ValidationSchemaVersion < 3 || proof.EvidenceCollectionComplete) &&
+        (!VirtualBoxReducedProfile.IsProfile(proof) || proof.VirtualBoxDriverCleanupVerified) &&
         InstallPassed(proof) && UninstallEvidence(proof) && IdentityPassed(proof) &&
         string.IsNullOrWhiteSpace(proof.ValidationError) &&
         proof.WorkflowStage?.StartsWith("Final absence verification", StringComparison.Ordinal) == true &&

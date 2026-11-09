@@ -19,6 +19,7 @@ public sealed class SandboxIssSession
     public string CompleteFlagPath => Path.Combine(OutputFolder, "analysis-complete.flag");
     public DateTime StartedAt { get; init; } = DateTime.Now;
     public bool RequiresIss { get; init; }
+    public TimeSpan OverallTimeout { get; init; } = TimeSpan.FromMinutes(30);
 }
 
 public static partial class SandboxIssRecorder
@@ -48,7 +49,7 @@ public static partial class SandboxIssRecorder
         return File.Exists(Path.Combine(windows, "System32", "WindowsSandbox.exe"));
     }
 
-    public static SandboxIssSession Start(string installerPath, InstallerKind kind, bool requiresIss, string baseSilentArguments, string additionalPackageArguments, bool blockBundledMcAfee, bool silentOnly = false)
+    public static SandboxIssSession Start(string installerPath, InstallerKind kind, bool requiresIss, string baseSilentArguments, string additionalPackageArguments, bool blockBundledMcAfee, bool silentOnly = false, bool prepareNetFx3 = false, bool installerCompatibility = false)
     {
         if (!File.Exists(installerPath)) throw new FileNotFoundException("Installer not found.", installerPath);
         if (silentOnly && requiresIss)
@@ -64,6 +65,21 @@ public static partial class SandboxIssRecorder
         var installerName = Path.GetFileName(installerPath);
         var copiedInstaller = Path.Combine(input, installerName);
         File.Copy(installerPath, copiedInstaller, true);
+        if (kind == InstallerKind.Msi && MsixDependencyService.Hash(copiedInstaller) == VirtualBoxReducedProfile.MsiHash)
+        {
+            VirtualBoxReducedProfile.Stage(installerPath, copiedInstaller);
+            File.WriteAllText(Path.Combine(input, "virtualbox-reduced-profile.txt"), VirtualBoxReducedProfile.Arguments, new UTF8Encoding(false));
+        }
+        if (kind == InstallerKind.Msix)
+        {
+            var identity = InstallerDetector.ReadMsixIdentity(copiedInstaller)?.Attribute("Name")?.Value;
+            if (string.IsNullOrWhiteSpace(identity))
+                throw new InvalidOperationException("MSIX/AppX manifest is missing the package identity.");
+            File.WriteAllText(Path.Combine(input, "msix-identity.txt"), identity, new UTF8Encoding(false));
+            var dependencies = MsixDependencyService.Find(installerPath)
+                .Select(path => new MsixDependency(Path.GetFileName(path), MsixDependencyService.Hash(path))).ToArray();
+            MsixDependencyService.CopyValidated(installerPath, copiedInstaller, dependencies);
+        }
         File.WriteAllText(Path.Combine(input, "pe-dependencies.json"), System.Text.Json.JsonSerializer.Serialize(PeDependencyService.Read(copiedInstaller)), new UTF8Encoding(false));
 
         var ps1 = Path.Combine(input, "Record-Iss.ps1");
@@ -72,7 +88,27 @@ public static partial class SandboxIssRecorder
         var metadata = kind == InstallerKind.Msi ? MsiMetadataService.Read(copiedInstaller) : new MsiMetadata();
         if (File.Exists(installerPath + ".config") && new FileInfo(installerPath + ".config").Length <= 65536)
             File.Copy(installerPath + ".config", copiedInstaller + ".config", true);
-        var netFxRequirement = NetFx3RequirementService.Detect(copiedInstaller, metadata);
+        var netFxRequirement = NetFx3RequirementService.Detect(copiedInstaller, metadata, prepareNetFx3);
+        var requiredPrimaryProduct = "";
+        if (Path.GetExtension(copiedInstaller).Equals(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            var version = FileVersionInfo.GetVersionInfo(copiedInstaller);
+            if (AdobeReaderInstaller.IsOfflinePackage(copiedInstaller, version))
+                requiredPrimaryProduct = AdobeReaderInstaller.DesktopProduct;
+            else if (BentleyBootstrapperService.Inspect(copiedInstaller, version.CompanyName ?? "") is not null)
+                requiredPrimaryProduct = version.ProductName ?? "";
+        }
+        ComponentDeploymentPlan? componentPlan = null;
+        if (requiredPrimaryProduct.Equals("gINT", StringComparison.OrdinalIgnoreCase))
+        {
+            componentPlan = GintDeploymentPlanService.TryStage(copiedInstaller, Path.Combine(input, "Payload"));
+            if (componentPlan is not null)
+            {
+                metadata = MsiMetadataService.Read(Path.Combine(input, "Payload", "gINT.msi"));
+                netFxRequirement = "gINT component recipe requires .NET Framework 3.5.";
+                File.WriteAllText(Path.Combine(input, "component-prerequisites.ps1"), GintDeploymentPlanService.SandboxScript(componentPlan), new UTF8Encoding(false));
+            }
+        }
         NetFx3SandboxSource.Stage(input);
         var sourceCache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "InstallerAnalyzer", "NetFx3Source");
         if (Directory.Exists(sourceCache))
@@ -86,7 +122,7 @@ public static partial class SandboxIssRecorder
         }
         File.WriteAllText(ps1, BuildDiscoveryScriptCore(installerName, requiresIss ? InstallerKind.InstallShield : kind,
             requiresIss ? "" : baseSilentArguments, additionalPackageArguments, blockBundledMcAfee, silentOnly, metadata,
-            recordResponses: requiresIss, netFxRequirement: netFxRequirement), new UTF8Encoding(false));
+            recordResponses: requiresIss, netFxRequirement: netFxRequirement, requiredPrimaryProduct: requiredPrimaryProduct, installerCompatibility: installerCompatibility, componentPlan: componentPlan), new UTF8Encoding(false));
 
         var wsb = Path.Combine(root, "Record-setup-iss.wsb");
         File.WriteAllText(Path.Combine(input, "Start-Analysis.ps1"), GuestBootstrapScript, new UTF8Encoding(false));
@@ -100,7 +136,8 @@ public static partial class SandboxIssRecorder
             OutputFolder = output,
             IssPath = Path.Combine(output, "setup.iss"),
             WsbPath = wsb,
-            RequiresIss = requiresIss
+            RequiresIss = requiresIss,
+            OverallTimeout = TimeSpan.FromMinutes(60)
         };
     }
 
@@ -135,7 +172,7 @@ public static partial class SandboxIssRecorder
     private static string BuildDiscoveryScript(string installerName, InstallerKind kind, string baseSilentArguments, string additionalPackageArguments, bool blockBundledMcAfee, bool silentOnly)
         => BuildDiscoveryScriptCore(installerName, kind, baseSilentArguments, additionalPackageArguments, blockBundledMcAfee, silentOnly, new MsiMetadata());
 
-    private static string BuildDiscoveryScriptCore(string installerName, InstallerKind kind, string baseSilentArguments, string additionalPackageArguments, bool blockBundledMcAfee, bool silentOnly, MsiMetadata msiMetadata, bool recordResponses = false, string netFxRequirement = "")
+    private static string BuildDiscoveryScriptCore(string installerName, InstallerKind kind, string baseSilentArguments, string additionalPackageArguments, bool blockBundledMcAfee, bool silentOnly, MsiMetadata msiMetadata, bool recordResponses = false, string netFxRequirement = "", string requiredPrimaryProduct = "", bool installerCompatibility = false, ComponentDeploymentPlan? componentPlan = null)
     {
         var escaped = installerName.Replace("'", "''");
         var kindName = kind.ToString().Replace("'", "''");
@@ -154,6 +191,12 @@ $BaseSilentArguments = '__BASE_ARGS__'
 $AdditionalPackageArguments = '__ADDITIONAL_ARGS__'
 $SilentInstallArguments = (@($BaseSilentArguments,$AdditionalPackageArguments) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ' '
 $InstallerKind = '__KIND__'
+$VirtualBoxProfileFile = 'C:\InstallerInput\virtualbox-reduced-profile.txt'
+$IsVirtualBoxReducedProfile = $InstallerKind -eq 'Msi' -and (Test-Path -LiteralPath $VirtualBoxProfileFile -PathType Leaf)
+$VirtualBoxLocalMsi = $null
+$IsWebView2Installer = $InstallerKind -eq 'Bootstrapper' -and
+    [IO.Path]::GetFileName($Installer) -match '^MicrosoftEdgeWebView2(?:Setup|RuntimeInstaller(?:X64|X86|ARM64))\.exe$'
+$RequiredPrimaryProduct = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__REQUIRED_PRIMARY__'))
 $EffectiveSilentInstaller = $Installer
 $DiscoveredInstallerKind = $null
 $DeploymentMechanism = $null
@@ -213,7 +256,7 @@ $McAfeeWatchdog = Start-McAfeeWatchdog
 function Get-UninstallSnapshot {
     $paths = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*','HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*')
     $entries=@(Get-ItemProperty $paths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName } | ForEach-Object {
-        [PSCustomObject]@{ Key=$_.PSPath; DisplayName=$_.DisplayName; DisplayVersion=$_.DisplayVersion; Publisher=$_.Publisher; InstallLocation=$_.InstallLocation; UninstallString=$_.UninstallString; QuietUninstallString=$_.QuietUninstallString; WindowsInstaller=$_.WindowsInstaller; ProductCode=if ($_.PSChildName -match '^\{[0-9A-Fa-f-]+\}$') {$_.PSChildName}else{$null} }
+        [PSCustomObject]@{ Key=$_.PSPath; DisplayName=$_.DisplayName; DisplayVersion=$_.DisplayVersion; Publisher=$_.Publisher; InstallLocation=$_.InstallLocation; UninstallString=$_.UninstallString; QuietUninstallString=$_.QuietUninstallString; WindowsInstaller=$_.WindowsInstaller; ProductCode=if ($_.WindowsInstaller -eq 1 -and $_.PSChildName -match '^\{[0-9A-Fa-f-]+\}$') {$_.PSChildName}else{$null} }
     })
     if($null -ne $script:MsiStaticMetadata -and [string]$script:MsiStaticMetadata.ProductCode -match '^\{[0-9A-Fa-f-]{36}\}$' -and @($entries|Where-Object {$_.ProductCode -eq $script:MsiStaticMetadata.ProductCode}).Count -eq 0){
       $native=Get-NativeMsiProductEntry
@@ -227,18 +270,52 @@ function Get-UninstallSnapshot {
     }
 }
 function Select-Primary($entries) {
-    $stem = [IO.Path]::GetFileNameWithoutExtension($Installer).ToLowerInvariant() -replace '(setup|installer|install)','' -replace '[^a-z0-9]',''
+    $installerName = [IO.Path]::GetFileName($Installer)
+    $stem = [IO.Path]::GetFileNameWithoutExtension($installerName).ToLowerInvariant() -replace '(setup|installer|install)','' -replace '[^a-z0-9]',''
     $best=$null; $bestScore=[int]::MinValue
     foreach($e in $entries){
+        if($IsVirtualBoxReducedProfile){
+          if($e.WindowsInstaller -ne 1 -or $e.ProductCode -ne $script:MsiStaticMetadata.ProductCode){continue}
+        } elseif($IsWebView2Installer){
+          if($e.DisplayName -ne 'Microsoft Edge WebView2 Runtime' -or $e.Publisher -ne 'Microsoft Corporation'){continue}
+        } elseif($IsCetMsi){
+          if($e.WindowsInstaller -ne 1 -or -not $e.ProductCode -or $e.Publisher -ne 'Configura Sverige AB' -or
+              $e.DisplayName -notmatch '^(?:Configura )?CET(?:\s|$)'){continue}
+        } elseif($RequiredPrimaryProduct -eq 'Adobe Acrobat'){
+          # The Reader core AppX entry is a component of the desktop MSI installation.
+          if($e.WindowsInstaller -ne 1 -or $e.ProductCode -notmatch '^\{AC76BA86-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\}$' -or
+              $e.DisplayName -notmatch '^Adobe Acrobat(?:\s|$)' -or $e.Publisher -notmatch '^Adobe(?:\s|$)'){continue}
+        } elseif(-not [string]::IsNullOrWhiteSpace($RequiredPrimaryProduct)){
+          $pattern='(?i)(?:^|[^a-z0-9])'+[regex]::Escape($RequiredPrimaryProduct.Trim())+'(?:$|[^a-z0-9])'
+          if([string]$e.DisplayName -notmatch $pattern -or [string]$e.Publisher -notmatch '(?i)^Bentley Systems'){continue}
+        }
         $name=([string]$e.DisplayName).ToLowerInvariant() -replace '[^a-z0-9]',''; $score=0
         if([string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace([string]$e.Key)){continue}
         if($stem -and ($name.Contains($stem) -or $stem.Contains($name))){$score+=70}
+        if($InstallerKind -eq 'WixBurn' -and $e.WindowsInstaller -ne 1){
+          # Burn registers the original bundle EXE under Package Cache alongside its child MSIs.
+          $command=Split-Command ([string]$e.QuietUninstallString)
+          if($command -and [IO.Path]::GetFileName($command[0]) -eq $installerName -and
+             $command[0] -match '\\Package Cache\\' -and $command[1] -match '(?:^|\s)[/-]uninstall(?:\s|$)'){$score+=150}
+        }
         if($e.InstallLocation){$score+=15}; if($e.UninstallString){$score+=10}; if($e.QuietUninstallString){$score+=15}; if($e.DisplayVersion){$score+=5}
-        if($name -match 'microsoftvisualc|redistributable|runtime|netframework|webview2'){$score-=50}
+        if(-not $IsWebView2Installer -and $name -match 'microsoftvisualc|redistributable|runtime|netframework|webview2'){$score-=50}
         if($score -gt $bestScore){$best=$e;$bestScore=$score}
     }
     if($bestScore -lt 0){return $null}
     return $best
+}
+function Assert-BootstrapperDiscoveryComplete($activity) {
+    if($activity.TimedOut -and -not $activity.MainMsiStarted -and -not [string]::IsNullOrWhiteSpace($RequiredPrimaryProduct) -and @($activity.ActiveProcesses | Where-Object {$_ -match '(?i)^Setup_CONNECTIONClient'}).Count){throw ('BOOTSTRAPPER TIMEOUT: CONNECTION Client setup did not return control before the timeout; '+$RequiredPrimaryProduct+' main MSI had not started. Review any captured prerequisite setup logs. No lifecycle removal was started.')}
+    if($null -ne $activity.MainMsiFailure){
+      $failure=$activity.MainMsiFailure
+      $detail=if($failure.VbScriptUnavailable){' Windows Installer reported error 2738 (VBScript runtime unavailable for a custom action).'}else{''}
+      throw ('INSTALL FAILED: '+$RequiredPrimaryProduct+' main MSI returned '+$failure.ExitCode+'.'+$detail+' See '+$failure.Log+'. Product registration does not validate this installation.')
+    }
+    if($activity.EndedWithoutPrimary){throw ('INSTALLER CHAIN EXITED: Setup and its observed descendants exited without registering '+$RequiredPrimaryProduct+'. See bootstrapper-process-exits.json and prerequisite logs for the observed exit codes.')}
+    if($activity.TimedOut -and $activity.PrerequisiteTimedOut){throw 'PREREQUISITE TIMEOUT: Tracked prerequisite setup was still running when its wait expired. No lifecycle removal was started.'}
+    if($activity.TimedOut){throw ('BOOTSTRAPPER TIMEOUT: Installer activity did not finish within the discovery budget. Expected application: '+$RequiredPrimaryProduct+'. Prerequisite entries are retained as diagnostics; lifecycle removal was not started. Finish the main installer in a fresh Sandbox.')}
+    if(-not [string]::IsNullOrWhiteSpace($RequiredPrimaryProduct) -and $null -eq $activity.Primary){throw ('PRIMARY APPLICATION NOT FOUND: Expected '+$RequiredPrimaryProduct+' was not registered. Only prerequisites or unrelated entries were observed; lifecycle removal was not started.')}
 }
 function Split-Command([string]$command) {
     if([string]::IsNullOrWhiteSpace($command)){return $null}
@@ -310,6 +387,18 @@ public static class InstallerAnalyzerWindowProbe {
   public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
+  [StructLayout(LayoutKind.Sequential)] struct WindowRect { public int Left, Top, Right, Bottom; }
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hWnd, out WindowRect rect);
+  [DllImport("user32.dll")] static extern IntPtr MonitorFromRect(ref WindowRect rect, uint flags);
+  public static bool IsPresentedWindow(long window) {
+    var handle=new IntPtr(window); WindowRect rect;
+    return IsWindowVisible(handle) && GetWindowRect(handle,out rect) &&
+      rect.Right>rect.Left && rect.Bottom>rect.Top && MonitorFromRect(ref rect,0)!=IntPtr.Zero;
+  }
+  public static string WindowPresentation(long window) {
+    WindowRect rect; if(!GetWindowRect(new IntPtr(window),out rect)) return "Bounds unavailable";
+    return rect.Left+","+rect.Top+","+rect.Right+","+rect.Bottom+"; onMonitor="+(MonitorFromRect(ref rect,0)!=IntPtr.Zero);
+  }
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
   [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr hWnd, EnumWindowsProc callback, IntPtr lParam);
@@ -338,28 +427,45 @@ public static class InstallerAnalyzerWindowProbe {
   }
   public static string[] VisibleWindows(int[] processIds) {
     var ids = new HashSet<int>(processIds); var found = new List<string>();
-    EnumWindows((h, l) => { uint pid; GetWindowThreadProcessId(h, out pid); if(ids.Contains((int)pid) && IsWindowVisible(h)) { var b=new StringBuilder(512); GetWindowText(h,b,b.Capacity); var t=b.ToString().Trim(); found.Add(h.ToInt64()+"|"+((int)pid)+"|"+(t.Length==0?"<untitled visible window>":t)); } return true; }, IntPtr.Zero);
+    EnumWindows((h, l) => { uint pid; GetWindowThreadProcessId(h, out pid); if(ids.Contains((int)pid) && IsPresentedWindow(h.ToInt64())) { var b=new StringBuilder(512); GetWindowText(h,b,b.Capacity); var t=b.ToString().Trim(); found.Add(h.ToInt64()+"|"+((int)pid)+"|"+(t.Length==0?"<untitled visible window>":t)); } return true; }, IntPtr.Zero);
     return found.ToArray();
   }
-  public static string[] DesktopWindows() {
+  public static string[] DesktopWindows(bool includeOffscreen=false) {
     var found = new List<string>();
-    EnumWindows((h, l) => { if(!IsWindowVisible(h)) return true; uint pid; GetWindowThreadProcessId(h, out pid); var b=new StringBuilder(512); GetWindowText(h,b,b.Capacity); var t=b.ToString().Trim(); if(t.Length>0) found.Add(h.ToInt64()+"|"+((int)pid)+"|"+t); return true; }, IntPtr.Zero);
+    EnumWindows((h, l) => { if(!(includeOffscreen ? IsWindowVisible(h) : IsPresentedWindow(h.ToInt64()))) return true; uint pid; GetWindowThreadProcessId(h, out pid); var b=new StringBuilder(512); GetWindowText(h,b,b.Capacity); var t=b.ToString().Trim(); if(t.Length>0) found.Add(h.ToInt64()+"|"+((int)pid)+"|"+t); return true; }, IntPtr.Zero);
     return found.ToArray();
   }
 }
 '@
 }
-function Update-TrackedProcessTree([System.Collections.Generic.HashSet[int]]$tracked) {
-    $all=@(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+function Get-InstallerProcessBirth($process,[datetime]$fallback) {
+    try {return $process.StartTime.ToUniversalTime()} catch {return $fallback.ToUniversalTime()}
+}
+function Expand-TrackedProcessTree($all,[System.Collections.Generic.HashSet[int]]$tracked,[hashtable]$births) {
+    $current=@{}
+    foreach($x in $all){
+      if($x.CreationDate){$current[[int]$x.ProcessId]=([datetime]$x.CreationDate).ToUniversalTime()}
+    }
     $changed=$true
     while($changed){
       $changed=$false
       foreach($x in $all){
-        if($tracked.Contains([int]$x.ParentProcessId) -and -not $tracked.Contains([int]$x.ProcessId)){
-          [void]$tracked.Add([int]$x.ProcessId); $changed=$true
-        }
+        $id=[int]$x.ProcessId; $parent=[int]$x.ParentProcessId
+        if(-not $current.ContainsKey($id) -or $tracked.Contains($id) -or -not $births.ContainsKey($parent)){continue}
+        $created=$current[$id]
+        if($created -lt $births[$parent]){continue}
+        # A PID can be recycled while children of its former owner are still running.
+        if($current.ContainsKey($parent) -and $current[$parent] -gt $births[$parent].AddMilliseconds(1) -and $created -ge $current[$parent]){continue}
+        [void]$tracked.Add($id); $births[$id]=$created; $changed=$true
       }
     }
+    return @($all | Where-Object {
+      $id=[int]$_.ProcessId
+      -not $tracked.Contains($id) -or ($current.ContainsKey($id) -and [math]::Abs(($current[$id]-$births[$id]).TotalMilliseconds) -le 1)
+    })
+}
+function Update-TrackedProcessTree([System.Collections.Generic.HashSet[int]]$tracked,[hashtable]$births) {
+    $all=@(Expand-TrackedProcessTree @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue) $tracked $births)
     Observe-InstallerTree $all $tracked
     return $all
 }
@@ -376,37 +482,28 @@ function Get-StringSetItems($set) {
 function Get-ObjectListItems($list) {
     $items=@(); if($null -ne $list){foreach($item in $list){$items += $item}}; return $items
 }
-function Invoke-BoundedTaskKill([int]$processId,[int]$waitMilliseconds=4000) {
-    # taskkill itself can block while Windows is tearing down a bootstrapper tree. Never let
-    # candidate cleanup inherit an unbounded native-process wait.
-    try {
-      $psi=New-Object System.Diagnostics.ProcessStartInfo
-      $psi.FileName="$env:SystemRoot\System32\taskkill.exe"
-      $psi.Arguments=('/PID '+$processId+' /T /F')
-      $psi.UseShellExecute=$false; $psi.CreateNoWindow=$true
-      $tk=New-Object System.Diagnostics.Process; $tk.StartInfo=$psi
-      [void]$tk.Start()
-      if(-not $tk.WaitForExit($waitMilliseconds)){try{$tk.Kill()}catch{};return $false}
-      return $true
-    } catch { return $false }
-}
-function Stop-TrackedProcessTree([System.Collections.Generic.HashSet[int]]$tracked,[int]$MaxSeconds=30) {
+function Stop-TrackedProcessTree([System.Collections.Generic.HashSet[int]]$tracked,[hashtable]$births,[int]$MaxSeconds=30) {
     # v0.11.38: cleanup is explicitly bounded. A rejected candidate must never strand the
     # lifecycle before the next strategy can start.
     Set-AnalysisHeartbeat 'candidate-cleanup-tree-start'
     $deadline=(Get-Date).AddSeconds([Math]::Max(5,$MaxSeconds))
-    $ids=@(Get-TrackedProcessIds $tracked) | Sort-Object -Descending
-    foreach($id in $ids){
-      if((Get-Date) -ge $deadline){break}
-      Set-AnalysisHeartbeat ('candidate-cleanup-taskkill-'+$id)
-      [void](Invoke-BoundedTaskKill $id 3500)
-    }
     do {
-      $trackedIds=@(Get-TrackedProcessIds $tracked)
-      $alive=@(Get-Process -ErrorAction SilentlyContinue | Where-Object {$_.Id -in $trackedIds})
-      if($alive.Count -eq 0){Set-AnalysisHeartbeat 'candidate-cleanup-tree-complete';return $true}
-      foreach($a in $alive){try{$a.Kill()}catch{}}
-      Set-AnalysisHeartbeat ('candidate-cleanup-waiting-'+$alive.Count)
+      $alive=0
+      $null=Update-TrackedProcessTree $tracked $births
+      foreach($id in @(Get-TrackedProcessIds $tracked)){
+        $p=Get-Process -Id $id -ErrorAction SilentlyContinue
+        if($null -eq $p){continue}
+        try {
+          # Hold the handle while checking birth time and terminating this exact process.
+          $null=$p.Handle
+          if(-not $p.HasExited -and [math]::Abs(($p.StartTime.ToUniversalTime()-$births[$id]).TotalMilliseconds) -le 1){
+            $alive++
+            $p.Kill()
+          }
+        }catch{}finally{$p.Dispose()}
+      }
+      if($alive -eq 0){Set-AnalysisHeartbeat 'candidate-cleanup-tree-complete';return $true}
+      Set-AnalysisHeartbeat ('candidate-cleanup-waiting-'+$alive)
       Start-Sleep -Milliseconds 250
     } while((Get-Date) -lt $deadline)
     Set-AnalysisHeartbeat 'candidate-cleanup-tree-timeout'
@@ -455,13 +552,9 @@ function Test-InstalledApplicationProcess([int]$processId,$entry,[string]$candid
       return $path.StartsWith($root,[StringComparison]::OrdinalIgnoreCase)
     } catch {return $false}
 }
-function Stop-DesktopWindowOwner($window,[System.Collections.Generic.HashSet[int]]$tracked) {
+function Stop-RejectedInstaller([System.Collections.Generic.HashSet[int]]$tracked,[hashtable]$births) {
     Set-AnalysisHeartbeat 'candidate-ui-reject-stop-owner-start'
-    if($null -ne $window -and $window.Pid -gt 0){
-      [void]$tracked.Add([int]$window.Pid)
-      [void](Invoke-BoundedTaskKill ([int]$window.Pid) 3500)
-    }
-    $stopped=Stop-TrackedProcessTree $tracked 30
+    $stopped=Stop-TrackedProcessTree $tracked $births 30
     Set-AnalysisHeartbeat ('candidate-ui-reject-stop-owner-finished-'+$stopped)
     return $stopped
 }
@@ -476,7 +569,7 @@ function Get-NormalizedProcessExitCode([string]$file,[string]$arguments,[int]$ex
     }
     return $exitCode
 }
-function Invoke-NativeProcess([string]$file,[string]$arguments,[bool]$MonitorUi=$false,[bool]$AbortOnUi=$false,[int]$MaxSeconds=0,$DetectionTarget=$null,[bool]$CompleteWhenDetected=$false) {
+function Invoke-NativeProcess([string]$file,[string]$arguments,[bool]$MonitorUi=$false,[bool]$AbortOnUi=$false,[int]$MaxSeconds=0,$DetectionTarget=$null,[bool]$CompleteWhenDetected=$false,[bool]$WatchInstallPrerequisites=$false) {
     $launchPhase=if($null -eq $DetectionTarget){'Discovery install'}else{'Silent reinstall'}
     $installedWindowTarget=$DetectionTarget
     $lastIdentityProbe=Get-Date
@@ -497,18 +590,21 @@ function Invoke-NativeProcess([string]$file,[string]$arguments,[bool]$MonitorUi=
     if($CompleteWhenDetected){Write-Checkpoint ($launchPhase+' launch: ProcessStartInfo ready')}
     $proc = New-Object System.Diagnostics.Process; $proc.StartInfo = $psi
     if($CompleteWhenDetected){Write-Checkpoint ($launchPhase+' launch: calling Process.Start')}
+    $launchTime=(Get-Date).ToUniversalTime()
     [void]$proc.Start()
     if($CompleteWhenDetected){Write-Checkpoint ($launchPhase+' launch: Process.Start returned PID '+$proc.Id)}
     $tracked=New-Object 'System.Collections.Generic.HashSet[int]'; [void]$tracked.Add([int]$proc.Id)
+    $births=@{}; $births[[int]$proc.Id]=Get-InstallerProcessBirth $proc $launchTime
     $ui=New-Object 'System.Collections.Generic.HashSet[string]'; $aborted=$false
     $uiDiagnostics=New-Object 'System.Collections.Generic.List[object]'
     $lastUiDiagnostic=[DateTime]::MinValue
     $unexpectedSince=@{}
     $rootExit=$null
     $startedAt=Get-Date; $completedByDetection=$false; $timedOut=$false
+    $clock=@{Deadline=$startedAt.AddSeconds($MaxSeconds);Limit=$startedAt.AddMinutes(50);ApplicationSeconds=$MaxSeconds;Waiting=$false;Seen=$false}
     while($true){
       Set-AnalysisHeartbeat 'native-process-monitor'
-      try{$all=Update-TrackedProcessTree $tracked}catch{$all=@()}
+      try{$all=Update-TrackedProcessTree $tracked $births}catch{$all=@()}
       # v0.12.7: registered application paths disambiguate post-install UI. Some installers launch the installed
       # application immediately after a successful unattended install. Once the expected identity
       # exists, do not misclassify that application window as interactive installer UI.
@@ -566,7 +662,7 @@ function Invoke-NativeProcess([string]$file,[string]$arguments,[bool]$MonitorUi=
               [void]$ui.Add($desc)
               if($AbortOnUi){
                 $aborted=$true
-                Stop-DesktopWindowOwner $w $tracked
+                Stop-RejectedInstaller $tracked $births
                 break
               }
             }
@@ -581,6 +677,7 @@ function Invoke-NativeProcess([string]$file,[string]$arguments,[bool]$MonitorUi=
             if($baselineProcessIds -contains $gp.Id -and -not $tracked.Contains([int]$gp.Id)){continue}
             try { $gp.Refresh() } catch {}
             if($gp.MainWindowHandle -eq 0 -or [string]::IsNullOrWhiteSpace($gp.MainWindowTitle)){continue}
+            if(-not [InstallerAnalyzerWindowProbe]::IsPresentedWindow($gp.MainWindowHandle.ToInt64())){continue}
             $pw=[PSCustomObject]@{Hwnd=$gp.MainWindowHandle.ToString();Pid=[int]$gp.Id;Title=[string]$gp.MainWindowTitle}
             if(Test-IgnoredDesktopWindow $pw){continue}
             if($CompleteWhenDetected -and $gp.Id -ne $proc.Id -and (Test-InstalledApplicationProcess $gp.Id $installedWindowTarget $file)){continue}
@@ -593,7 +690,7 @@ function Invoke-NativeProcess([string]$file,[string]$arguments,[bool]$MonitorUi=
               $desc=($gp.Id.ToString()+' :: '+$gp.ProcessName+' :: '+$gp.MainWindowTitle)
               Record-InstallerUiEvidence $pw $tracked
               [void]$ui.Add($desc)
-              if($AbortOnUi){$aborted=$true;Stop-DesktopWindowOwner $pw $tracked;break}
+              if($AbortOnUi){$aborted=$true;Stop-RejectedInstaller $tracked $births;break}
             }
           }
           if($aborted){break}
@@ -606,7 +703,11 @@ function Invoke-NativeProcess([string]$file,[string]$arguments,[bool]$MonitorUi=
       # only application processes confirmed beneath its registered installation directory.
       # Registration can precede the end of the install transaction. Retain the real root
       # process exit code; only exclude a proven installed application's launched processes.
-      if($MaxSeconds -gt 0 -and ((Get-Date)-$startedAt).TotalSeconds -ge $MaxSeconds){$timedOut=$true;break}
+      if($WatchInstallPrerequisites -or $CompleteWhenDetected){
+        $prerequisite=Find-TrackedPrerequisite $all $tracked $proc.Id
+        Update-InstallWait $clock $prerequisite (Get-Date)
+      }
+      if($MaxSeconds -gt 0 -and (Get-Date) -ge $clock.Deadline){$timedOut=$true;break}
       # Bootstrapper parents often exit after handing work to a child. Keep watching every PID
       # already discovered until the entire tracked tree is gone.
       $trackedIds=@(Get-TrackedProcessIds $tracked)
@@ -614,10 +715,10 @@ function Invoke-NativeProcess([string]$file,[string]$arguments,[bool]$MonitorUi=
       if($CompleteWhenDetected -and $null -ne $installedWindowTarget -and $proc.HasExited){
         $alive=@($alive | Where-Object {-not (Test-InstalledApplicationProcess ([int]$_.ProcessId) $installedWindowTarget $file)})
       }
-      if($proc.HasExited -and ($alive.Count -eq 0 -or (Test-MsiClientCommand $file))){break}
+      if($proc.HasExited -and -not $clock.Waiting -and ($alive.Count -eq 0 -or (Test-MsiClientCommand $file))){break}
       Start-Sleep -Milliseconds 150
     }
-    if($completedByDetection -or $timedOut){try{Stop-TrackedProcessTree $tracked}catch{}}
+    if($completedByDetection -or $timedOut){try{Stop-TrackedProcessTree $tracked $births}catch{}}
     try{$proc.WaitForExit(2000)|Out-Null}catch{}
     $completedAt=Get-Date
     $exit=if($aborted){-1001}elseif($completedByDetection){0}elseif($timedOut){-1002}elseif($null -ne $rootExit){$rootExit}elseif($proc.HasExited){$proc.ExitCode}else{-2}
@@ -707,8 +808,41 @@ function Get-MsiEmbeddedInstanceTransforms([string]$file) {
     }
     return $names.ToArray()
 }
+function Test-VirtualBoxDriverState([string]$phase,[bool]$installed) {
+    if(-not $IsVirtualBoxReducedProfile){return}
+    $drivers=@(Get-CimInstance Win32_SystemDriver -ErrorAction Stop | Where-Object Name -like 'VBox*' | Select-Object Name,State,StartMode)
+    $network=@(netcfg.exe -s n | Select-String -Pattern 'VBox|VirtualBox' | ForEach-Object Line)
+    if($LASTEXITCODE -ne 0){throw 'Could not inspect VirtualBox network bindings.'}
+    $packages=@(Get-WindowsDriver -Online -ErrorAction Stop | Where-Object {
+      $_.ProviderName -match '^Oracle' -and [IO.Path]::GetFileName($_.OriginalFileName) -match '^VBox'
+    } | Select-Object Driver,OriginalFileName,ProviderName)
+    Add-Content -LiteralPath 'C:\InstallerOutput\virtualbox-driver-evidence.jsonl' -Value (
+      [PSCustomObject]@{Phase=$phase;Drivers=$drivers;Bindings=$network;DriverPackages=$packages} | ConvertTo-Json -Depth 4 -Compress)
+    if($installed){
+      $running=@($drivers | Where-Object State -eq 'Running' | ForEach-Object Name)
+      if('VBoxSup' -notin $running -or 'VBoxUSBMon' -notin $running -or 'VBoxNetLwf' -notin $running -or
+         'VBoxNetAdp' -in $drivers.Name -or -not ($network -match 'oracle_vboxnetlwf')){
+        throw "VirtualBox did not establish the expected core, USB and bridge driver state during $phase."
+      }
+    }elseif($drivers.Count -or $network.Count -or $packages.Count){
+      throw "VirtualBox driver or network traces remain during $phase."
+    }
+}
 function Get-MsiInstallCandidates {
     $base=if([string]::IsNullOrWhiteSpace($SilentInstallArguments)){'/qn /norestart'}else{$SilentInstallArguments}
+    if($IsVirtualBoxReducedProfile){
+      return (New-InstallCandidate 'VirtualBox core, USB and bridge' $Installer $base 'Msi' 100 'Pinned Oracle x64 MSI and cabinet with the VM-tested feature set.')
+    }
+    if($IsCetMsi){
+      # Configura's unattended install guide uses the version ID and an embedded instance transform.
+      if($base -notmatch '(?i)\bCET_VERSIONID\s*='){
+        $versionId='64-bit'
+        if([IO.Path]::GetFileNameWithoutExtension($Installer) -match '#([A-Za-z0-9_.-]{1,80})$'){$versionId=$matches[1]}
+        $base+=' CET_VERSIONID='+$versionId
+      }
+      if($base -notmatch '(?i)\bTRANSFORMS\s*='){$base+=' TRANSFORMS=:InstanceId01'}
+      return (New-InstallCandidate 'Configura CET instance strategy' $Installer $base 'Msi' 100 'Vendor-documented unattended installation for a clean CET instance.')
+    }
     $items=@(New-InstallCandidate 'Known MSI strategy' $Installer $base 'Msi' 100 'Preferred Windows Installer quiet strategy with verbose logging.')
     if($base -notmatch '(?i)\bTRANSFORMS\s*='){
       foreach($name in @(Get-MsiEmbeddedInstanceTransforms $Installer | Sort-Object | Select-Object -First 3)){
@@ -783,7 +917,13 @@ function Invoke-InstallCandidateCore($candidate,$detectionTarget=$null) {
     Write-Checkpoint ('Silent reinstall invoke entered: '+$candidate.Name)
     Write-Checkpoint ('Silent reinstall launch file: '+$candidate.File)
     Write-Checkpoint ('Silent reinstall arguments prepared; length='+([string]$candidate.Arguments).Length)
-    if($candidate.Kind -eq 'Msi'){ $msiLog='C:\InstallerOutput\msi-install.log'; return Invoke-NativeProcess 'msiexec.exe' (("/i `"$($candidate.File)`" " + $candidate.Arguments + " /L*v `"$msiLog`"").Trim()) $true $true 600 $detectionTarget $true}
+    if($candidate.Kind -eq 'Msi'){
+      $msiLog='C:\InstallerOutput\msi-install.log'
+      if($IsVirtualBoxReducedProfile){
+        return Invoke-NativeProcess 'msiexec.exe' (('/i "'+$VirtualBoxLocalMsi+'" '+$candidate.Arguments+' /L*v! "'+$msiLog+'"').Trim()) $true $true 120 $detectionTarget $false
+      }
+      return Invoke-NativeProcess 'msiexec.exe' (("/i `"$($candidate.File)`" " + $candidate.Arguments + " /L*v `"$msiLog`"").Trim()) $true $true 600 $detectionTarget $true
+    }
     # Bound each reinstall candidate to ten minutes and stop as soon as the expected application
     # is detected. This prevents Adobe/other bootstrappers from hanging on normal descendants.
     return Invoke-NativeProcess $candidate.File $candidate.Arguments $true $true 600 $detectionTarget $true
@@ -818,15 +958,39 @@ function Get-SecondGenerationCandidates($files) {
     }
     $dedupe=@{}; return @($list | Sort-Object Score -Descending | Where-Object {$k=($_.Kind+'|'+$_.File+'|'+$_.Arguments).ToLowerInvariant();if($dedupe.ContainsKey($k)){$false}else{$dedupe[$k]=$true;$true}} | Select-Object -First 8)
 }
+function Normalize-QSetupUninstallCommand([string]$command) {
+    if($InstallerKind -ne 'QSetup' -or [string]::IsNullOrWhiteSpace($command)){return $command}
+    $parts=Split-Command $command
+    if(-not $parts){return $command}
+    # QSetup /silent can still display its removal wizard. Preserve vendor arguments
+    # and add /Hide even when the registry labels the command QuietUninstallString.
+    if([string]$parts[1] -notmatch '(?i)(^|\s)/hide(\s|$)'){return ($command.TrimEnd()+' /Hide')}
+    return $command
+}
+function Get-InnoUninstallCommand([string]$command) {
+    if($InstallerKind -ne 'InnoSetup'){return $null}
+    $parts=Split-Command $command
+    if(-not $parts -or [IO.Path]::GetFileName($parts[0]) -notmatch '^unins\d*\.exe$'){return $null}
+    # Keep quoted argument values intact when replacing Inno's progress-window switch.
+    $arguments=[regex]::Matches([string]$parts[1], '(?:[^\s"]+|"[^"]*")+') |
+        ForEach-Object Value |
+        Where-Object {$_ -notmatch '^/(SILENT|VERYSILENT|SUPPRESSMSGBOXES|NORESTART)$'}
+    return ((@('"'+$parts[0]+'"') + @($arguments) + @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART')) -join ' ')
+}
 function Get-SilentUninstallCandidates($entry) {
     if($entry.Key -like 'APPX::*' -and -not [string]::IsNullOrWhiteSpace([string]$entry.QuietUninstallString)){return @([string]$entry.QuietUninstallString)}
     $list=New-Object 'System.Collections.Generic.List[string]'
-    if(-not [string]::IsNullOrWhiteSpace([string]$entry.QuietUninstallString)){$list.Add([string]$entry.QuietUninstallString)}
+    $quiet=[string]$entry.QuietUninstallString
+    $inno=Get-InnoUninstallCommand $quiet
+    if($inno){$list.Add($inno)}
+    elseif(-not [string]::IsNullOrWhiteSpace($quiet)){$list.Add((Normalize-QSetupUninstallCommand $quiet))}
     $msi=Get-MsiUninstallCommand $entry; if($msi){$list.Add($msi)}
     if(-not [string]::IsNullOrWhiteSpace([string]$entry.UninstallString)){
       $u=[string]$entry.UninstallString
+      $inno=Get-InnoUninstallCommand $u
+      if($inno){$list.Add($inno)}
       $sp=Split-Command $u
-      if($sp){
+      if($sp -and -not $inno){
         $exe=$sp[0]
         $args=[string]$sp[1]
         if($args -match '(?i)(^|\s)(/qn|/quiet|/silent|/verysilent|/S|--silent|-s)(\s|$)'){$list.Add($u)}
@@ -863,12 +1027,13 @@ function Get-SilentUninstallCandidates($entry) {
     $seen=@{}; return @($list | Where-Object {$_ -and -not $seen.ContainsKey($_.ToLowerInvariant()) -and ($seen[$_.ToLowerInvariant()]=$true)})
 }
 function Get-MsiUninstallCommand($entry) {
-    if($entry.WindowsInstaller -eq 1 -and $entry.ProductCode){ return "msiexec.exe /x $($entry.ProductCode) /qn /norestart" }
-    return $null
-}
-function Get-InnoUninstallCommand($entry) {
-    if($InstallerKind -eq 'InnoSetup' -and $entry.UninstallString){
-        $p=Split-Command $entry.UninstallString; if($p){ return ('"'+$p[0]+'" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART') }
+    if($entry.WindowsInstaller -eq 1 -and $entry.ProductCode){
+      $command="msiexec.exe /x $($entry.ProductCode) /qn /norestart"
+      if($CetHasDataPrompt -and $entry.Publisher -eq 'Configura Sverige AB' -and $entry.DisplayName -match '^(?:Configura )?CET(?:\s|$)'){
+        # Skip the package's Clear User Data action so unattended removal preserves user data.
+        $command+=' USED_DATA_ALREADY_REMOVED=1'
+      }
+      return $command
     }
     return $null
 }
@@ -917,15 +1082,183 @@ function Get-ObservedSilentChild($processes) {
     }
     return $null
 }
+function Find-BootstrapperMainMsi($processes,$tracked,[string]$product) {
+    if([string]::IsNullOrWhiteSpace($product)){return $null}
+    foreach($process in $processes){
+      if(-not $tracked.Contains([int]$process.ProcessId) -or $process.Name -notmatch '(?i)^msiexec(?:\.exe)?$'){continue}
+      if([string]$process.CommandLine -match '(?i)(?:^|\s)/(?:i|package)\s*(?:"(?<msi>[^"]+\.msi)"|(?<msi>[^\s"]+\.msi))(?=\s|$)'){
+        if([IO.Path]::GetFileNameWithoutExtension($matches['msi']) -ieq $product){return $process}
+      }
+    }
+    return $null
+}
+function Find-TrackedPrerequisite($processes,$tracked,[int]$rootPid) {
+    # Use recognizable prerequisite package names on owned descendants only.
+    $runtime='(?:vc[0-9]*redist|vc_redist|dotnetfx|ndp\d|(?:dotnet|windowsdesktop|aspnetcore)-runtime-|MicrosoftEdgeWebView2RuntimeInstaller|AccessDatabaseEngine|dxsetup|Setup_CONNECTIONClient)'
+    foreach($process in $processes){
+      if($process.ProcessId -eq $rootPid -or -not $tracked.Contains([int]$process.ProcessId)){continue}
+      if($process.Name -match ('(?i)^'+$runtime+'[\w.-]*\.exe$')){return $process}
+      if($process.Name -match '(?i)^msiexec(?:\.exe)?$' -and $process.CommandLine -match ('(?i)(?:^|\s)/(?:i|package)\s*(?:"[^"]*[\\/]|[^\s"]*[\\/]|"?)'+$runtime+'[\w.-]*\.msi(?:"|\s|$)')){return $process}
+    }
+}
+function Update-InstallWait($clock,$prerequisite,[datetime]$now) {
+    if($prerequisite -and -not $clock.Waiting){
+      $clock.Waiting=$true
+      $clock.Seen=$true
+      $clock.Deadline=$now.AddMinutes(15)
+      Write-Checkpoint ('Waiting for prerequisite setup: '+$prerequisite.Name+'; application timer is paused')
+    }elseif(-not $prerequisite -and $clock.Waiting){
+      $clock.Waiting=$false
+      $clock.Deadline=$now.AddSeconds($clock.ApplicationSeconds)
+      Write-Checkpoint 'Prerequisite setup processes exited; waiting for the application installer'
+    }
+    if($clock.Deadline -gt $clock.Limit){$clock.Deadline=$clock.Limit}
+}
+function Save-BootstrapperLogSnapshot([string]$log,[string]$output,[string]$name) {
+    $source=$null;$destination=$null
+    try {
+      $source=[IO.File]::Open($log,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+      if($source.Length -eq 0){return $null}
+      $unicode=$source.ReadByte() -eq 255 -and $source.ReadByte() -eq 254
+      [long]$offset=[Math]::Max(0,$source.Length-4194304);if($unicode -and $offset%2){$offset++}
+      $source.Position=$offset;$destination=[IO.File]::Create((Join-Path $output $name))
+      if($unicode -and $offset -gt 0){$destination.WriteByte(255);$destination.WriteByte(254)}
+      $buffer=New-Object byte[] 65536;[long]$remaining=[Math]::Min(4194304,$source.Length-$offset)
+      while($remaining -gt 0){$read=$source.Read($buffer,0,[int][Math]::Min($buffer.Length,$remaining));if($read -eq 0){break};$destination.Write($buffer,0,$read);$remaining-=$read}
+      return [PSCustomObject]@{Source=$log;File=$name;Truncated=($offset -gt 0)}
+    } finally {if($destination){$destination.Dispose()};if($source){$source.Dispose()}}
+}
+function Save-BootstrapperMsiLogs([string[]]$files,[string]$product,[string]$output,[string]$tempRoot) {
+    if([string]::IsNullOrWhiteSpace($product)){return @()}
+    $allowed=[IO.Path]::GetFullPath($tempRoot).TrimEnd('\')+'\'
+    $saved=@();$seen=@{}
+    foreach($file in $files){
+      try {
+        $full=[IO.Path]::GetFullPath($file)
+        if(-not $full.StartsWith($allowed,[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetExtension($full) -ine '.msi' -or [IO.Path]::GetFileNameWithoutExtension($full) -ine $product){continue}
+        $directory=[IO.Path]::GetDirectoryName($full);$parent=[IO.Path]::GetDirectoryName($directory)
+        foreach($folder in @($directory,$parent)){
+          if(-not $folder){continue}
+          $log=[IO.Path]::GetFullPath((Join-Path $folder ($product+'SetupLog.txt')))
+          if(-not $log.StartsWith($allowed,[StringComparison]::OrdinalIgnoreCase) -or $seen.ContainsKey($log) -or -not [IO.File]::Exists($log)){continue}
+          $seen[$log]=$true;$snapshot=Save-BootstrapperLogSnapshot $log $output ('bootstrapper-main-msi-log-'+($saved.Count+1)+'.txt')
+          if($null -ne $snapshot){$saved+=@($snapshot)}
+        }
+      } catch {Write-DebugEvent 'Bootstrapper MSI log snapshot unavailable' ([PSCustomObject]@{Detail=$_.Exception.Message})}
+    }
+    return $saved
+}
+function Get-BootstrapperMainMsiStatus($snapshots,[string]$output,[string]$product) {
+    if([string]::IsNullOrWhiteSpace($product)){return}
+    $productPattern='(?i)(?:^|[^a-z0-9])'+[regex]::Escape($product.Trim())+'(?:$|[^a-z0-9])'
+    $success=$null
+    foreach($snapshot in $snapshots){
+      try{
+        $log=[IO.File]::ReadAllText((Join-Path $output $snapshot.File))
+        $terminal=$null
+        $vbScriptUnavailable=$false
+        foreach($line in ($log -split '\r?\n')){
+          if($line -match '(?i)\berror code is 2738\b'){$vbScriptUnavailable=$true}
+          if($line -match '(?i)Product Name:\s*(?<product>.*?)\.\s+Product Version:.*Installation success or error status:\s*(?<status>\d{1,5})\.?\s*$'){
+            $loggedProduct=$Matches.product
+            $status=[int]$Matches.status
+            if($loggedProduct -match $productPattern){
+              $terminal=[PSCustomObject]@{ExitCode=$status;Log=$snapshot.File;VbScriptUnavailable=$vbScriptUnavailable}
+            }
+            $vbScriptUnavailable=$false
+          }
+        }
+        if($null -ne $terminal){
+          if($terminal.ExitCode -notin @(0,1641,3010)){return $terminal}
+          if($null -eq $success -or $terminal.ExitCode -ne 0){$success=$terminal}
+        }
+      }catch{Write-DebugEvent 'Main MSI status could not be read' ([PSCustomObject]@{Detail=$_.Exception.Message})}
+    }
+    return $success
+}
+function Get-BootstrapperSettleDeadline($status,$primary,[bool]$settling,[bool]$prerequisiteActive,[datetime]$deadline) {
+    if(-not $settling -and -not $prerequisiteActive -and $primary -and $null -ne $status -and $status.ExitCode -eq 0){
+      return $deadline.AddSeconds(60)
+    }
+}
+function Update-BootstrapperExitEvidence($processes,$tracked,$handles,$exits) {
+    foreach($process in $processes){
+      $id=[int]$process.ProcessId
+      if(-not $tracked.Contains($id) -or $handles.ContainsKey($id) -or $handles.Count -ge 128){continue}
+      $entry=[ordered]@{ProcessId=$id;Name=[string]$process.Name;ParentProcessId=[int]$process.ParentProcessId;ObservedAt=(Get-Date).ToString('o');Status='Running';ExitCode=$null;ExitedAt=$null}
+      $handle=$null
+      try {
+        $handle=[Diagnostics.Process]::GetProcessById($id)
+        $null=$handle.Handle
+      }catch{
+        if($handle){$handle.Dispose();$handle=$null}
+        $entry.Status='Exit code unavailable'
+      }
+      $handles[$id]=[PSCustomObject]@{Process=$handle;Evidence=$entry}
+      [void]$exits.Add($entry)
+    }
+    foreach($record in $handles.Values){
+      if($null -eq $record.Process -or $record.Evidence.Status -ne 'Running'){continue}
+      try {
+        if($record.Process.HasExited){
+          $record.Evidence.ExitCode=$record.Process.ExitCode
+          $record.Evidence.ExitedAt=$record.Process.ExitTime.ToString('o')
+          $record.Evidence.Status='Exited'
+        }
+      }catch{$record.Evidence.Status='Exit code unavailable'}
+    }
+}
+function Save-BootstrapperPrerequisiteLogs([bool]$observedConnection,[string]$product,[string]$output,[string]$tempRoot,[datetime]$since,[bool]$observedVisualCpp=$false) {
+    if((-not $observedConnection -and -not $observedVisualCpp) -or [string]::IsNullOrWhiteSpace($product)){return @()}
+    $saved=@()
+    # Bentley documents CONNECTION_Client*.log in the root of the user's temp directory.
+    # Application/authentication logs under LocalAppData are deliberately outside this scope.
+    $logs=@(Get-ChildItem -LiteralPath $tempRoot -File -ErrorAction SilentlyContinue | Where-Object {
+      $_.LastWriteTimeUtc -ge $since.ToUniversalTime() -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -and (
+        ($observedConnection -and $_.Name -match '(?i)^(?:CONNECTION_Client|Setup_CONNECTIONClient).*\.log$') -or
+        ($observedVisualCpp -and $_.Name -match '(?i)^(?:dd_vcredist|dd_vc_redist|vc_redist|vcredist)[a-z0-9_.-]*\.(?:log|txt)$')
+      )
+    } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 8)
+    foreach($file in $logs){
+      try {$snapshot=Save-BootstrapperLogSnapshot $file.FullName $output ('bootstrapper-prerequisite-log-'+($saved.Count+1)+'.txt');if($null -ne $snapshot){$saved+=@($snapshot)}}
+      catch {Write-DebugEvent 'Bootstrapper prerequisite log snapshot unavailable' ([PSCustomObject]@{Detail=$_.Exception.Message})}
+    }
+    return $saved
+}
+function Test-BootstrapperChainExited($processes,$tracked,$handles,[int]$rootPid) {
+    if(-not $handles.ContainsKey($rootPid) -or $handles[$rootPid].Evidence.Status -ne 'Exited'){return $false}
+    foreach($process in $processes){
+      if(-not $tracked.Contains([int]$process.ProcessId)){continue}
+      if($process.Name -match '(?i)^msiexec(?:\.exe)?$' -and ([string]$process.CommandLine) -match '(?i)(?:^|\s)(?:/V|-Embedding)(?:\s|$)'){continue}
+      return $false
+    }
+    return $true
+}
 function Watch-Bootstrapper([int]$RootPid,[string[]]$BeforeKeys) {
     $tracked = New-Object 'System.Collections.Generic.HashSet[int]'; [void]$tracked.Add($RootPid)
     $seen = New-Object 'System.Collections.Generic.HashSet[int]'
     $processLog = New-Object 'System.Collections.Generic.List[string]'
+    $imageLog = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     $fileLog = New-Object 'System.Collections.Generic.HashSet[string]'
-    $primary=$null; $new=@(); $quietSince=$null; $deadline=(Get-Date).AddMinutes(15)
+    $primary=$null; $new=@(); $quietSince=$null; $discoveryStarted=Get-Date
+    $clock=@{Deadline=$discoveryStarted.AddMinutes(15);Limit=$discoveryStarted.AddMinutes(50);ApplicationSeconds=900;Waiting=$false;Seen=$false}
+    $mainStageStarted=$false;$connectionStageSeen=$false;$settling=$false;$settled=$false;$visualCppSeen=$false;$endedWithoutPrimary=$false
+    $processHandles=@{}
+    $exitEvidence=New-Object 'System.Collections.Generic.List[object]' 
     $infra='^(msiexec|OfficeClickToRun|OfficeC2RClient|setup|installer|install|update|Reader_en_install)'
     $postInstall='^(Acrobat|AdobeCollabSync|ShowAppPickerForPDF|msedge|msedgewebview2|explorer|SSScheduler|mc-webview-cnt|identity_helper)$'
-    while((Get-Date) -lt $deadline){
+    try {
+    while($true){
+      if((Get-Date) -ge $clock.Deadline){
+        if(-not $mainStageStarted -or $settling -or $clock.Waiting){break}
+        $settleLogs=@(Save-BootstrapperMsiLogs @(Get-StringSetItems $fileLog) $RequiredPrimaryProduct 'C:\InstallerOutput' $env:TEMP)
+        $status=Get-BootstrapperMainMsiStatus $settleLogs 'C:\InstallerOutput' $RequiredPrimaryProduct
+        $settleDeadline=Get-BootstrapperSettleDeadline $status $primary $settling $clock.Waiting $clock.Deadline
+        if($null -eq $settleDeadline -or (Get-Date) -ge $settleDeadline){break}
+        $settling=$true
+        $clock.Deadline=$settleDeadline
+        Write-Checkpoint ('Main MSI reported success: '+$RequiredPrimaryProduct+'; waiting for setup activity to settle')
+      }
       Set-AnalysisHeartbeat 'bootstrapper-discovery'
       $all=@(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
       $changed=$true
@@ -936,8 +1269,26 @@ function Watch-Bootstrapper([int]$RootPid,[string[]]$BeforeKeys) {
           if($tracked.Contains([int]$proc.ParentProcessId) -and -not $tracked.Contains([int]$proc.ProcessId)){[void]$tracked.Add([int]$proc.ProcessId);$changed=$true}
         }
       }
+      Update-BootstrapperExitEvidence $all $tracked $processHandles $exitEvidence
+      if(@($all | Where-Object {$tracked.Contains([int]$_.ProcessId) -and $_.Name -match '(?i)^(?:vc[0-9]*redist|vc_redist)'}).Count){$visualCppSeen=$true}
+      if(-not $connectionStageSeen -and @($all | Where-Object {$tracked.Contains([int]$_.ProcessId) -and $_.Name -match '(?i)^Setup_CONNECTIONClient'}).Count){
+        $connectionStageSeen=$true
+      }
+      $prerequisite=Find-TrackedPrerequisite $all $tracked $RootPid
+      if(-not $settling){Update-InstallWait $clock $prerequisite (Get-Date)}
+      if(-not $mainStageStarted -and -not $clock.Waiting){
+        $mainMsi=Find-BootstrapperMainMsi $all $tracked $RequiredPrimaryProduct
+        if($null -ne $mainMsi){
+          $mainStageStarted=$true;$mainStarted=Get-Date
+          $maximum=if($clock.Seen){$clock.Limit}else{$discoveryStarted.AddMinutes(30)}
+          $clock.Deadline=if($mainStarted.AddMinutes(15) -lt $maximum){$mainStarted.AddMinutes(15)}else{$maximum}
+          $result['BootstrapperMainMsi']=[ordered]@{ProcessId=$mainMsi.ProcessId;StartedAt=$mainStarted.ToString('o');Deadline=$clock.Deadline.ToString('o');Product=$RequiredPrimaryProduct}
+          Write-Checkpoint ('Main MSI started: '+$RequiredPrimaryProduct+'; waiting for setup and product registration')
+        }
+      }
       foreach($proc in $all){
         if($proc.ProcessId -in $BeforeProcessIds){continue}
+        if($tracked.Contains([int]$proc.ProcessId) -and $imageLog.Count -lt 32 -and -not [string]::IsNullOrWhiteSpace([string]$proc.ExecutablePath)){if($imageLog.Add([string]$proc.ExecutablePath)){$result['BootstrapperObservedImages']=@(Get-StringSetItems $imageLog)}}
         $relevant=$tracked.Contains([int]$proc.ProcessId) -or ($proc.Name -match $infra)
         if(-not $relevant){continue}
         if($seen.Add([int]$proc.ProcessId)){
@@ -954,13 +1305,38 @@ function Watch-Bootstrapper([int]$RootPid,[string[]]$BeforeKeys) {
         if($_.ProcessId -in $BeforeProcessIds){return $false}
         if($_.Name -match $postInstall){return $false}
         if($_.Name -notmatch $infra){return $false}
+        # Windows Installer service/COM hosts can outlive the completed client transaction.
+        if($_.Name -match '(?i)^msiexec(?:\.exe)?$' -and ([string]$_.CommandLine) -match '(?i)(?:^|\s)(?:/V|-Embedding)(?:\s|$)'){return $false}
         if($_.Name -match '^OfficeClickToRun' -and ([string]$_.CommandLine) -match '(?i)\s/service(?:\s|$)'){return $false}
         return $true
       })
-      if($primary -and $active.Count -eq 0){if(-not $quietSince){$quietSince=Get-Date}; if(((Get-Date)-$quietSince).TotalSeconds -ge 24){break}}else{$quietSince=$null}
+      $chainExited=Test-BootstrapperChainExited $all $tracked $processHandles $RootPid
+      $idle=if($primary){-not $clock.Waiting -and -not $prerequisite -and $active.Count -eq 0}else{$chainExited}
+      if($idle){
+        if(-not $quietSince){$quietSince=Get-Date}
+        if(((Get-Date)-$quietSince).TotalSeconds -ge 24){
+          $endedWithoutPrimary=$null -eq $primary
+          $settled=$true
+          break
+        }
+      }else{$quietSince=$null}
       Start-Sleep 3
     }
-    return [PSCustomObject]@{Processes=@($processLog);Files=@($fileLog);Primary=$primary;NewEntries=@($new);TimedOut=((Get-Date) -ge $deadline)}
+    Update-BootstrapperExitEvidence @() $tracked $processHandles $exitEvidence
+    $result['BootstrapperProcessExits']=@(Get-ObjectListItems $exitEvidence)
+    $result.BootstrapperProcessExits | ConvertTo-Json -Depth 4 | Set-Content 'C:\InstallerOutput\bootstrapper-process-exits.json' -Encoding UTF8
+    $result['BootstrapperObservedImages']=@(Get-StringSetItems $imageLog)
+    $snapshots=@(Save-BootstrapperMsiLogs @(Get-StringSetItems $fileLog) $RequiredPrimaryProduct 'C:\InstallerOutput' $env:TEMP)
+    $result['BootstrapperMsiLogSnapshots']=$snapshots
+    $status=Get-BootstrapperMainMsiStatus $snapshots 'C:\InstallerOutput' $RequiredPrimaryProduct
+    $mainMsiFailure=if($null -ne $status -and $status.ExitCode -notin @(0,1641,3010)){$status}
+    $result['BootstrapperPrerequisiteLogSnapshots']=@(Save-BootstrapperPrerequisiteLogs $connectionStageSeen $RequiredPrimaryProduct 'C:\InstallerOutput' $env:TEMP $discoveryStarted $visualCppSeen)
+    $result['BootstrapperPrerequisiteLogStatus']=if(-not $connectionStageSeen -and -not $visualCppSeen){'Setup not observed'}elseif(@($result.BootstrapperPrerequisiteLogSnapshots).Count -eq 0){'No readable current prerequisite installation logs captured from guest TEMP'}else{'Captured'}
+    $activeNames=@($active | ForEach-Object {$_.Name} | Sort-Object -Unique);$result['BootstrapperActiveProcesses']=$activeNames
+    return [PSCustomObject]@{Processes=@($processLog);Files=@($fileLog);Primary=$primary;NewEntries=@($new);TimedOut=(-not $settled);EndedWithoutPrimary=$endedWithoutPrimary;PrerequisiteTimedOut=$clock.Waiting;MainMsiFailure=$mainMsiFailure;MainMsiStarted=$mainStageStarted;ActiveProcesses=$activeNames}
+    } finally {
+      foreach($record in $processHandles.Values){if($record.Process){$record.Process.Dispose()}}
+    }
 }
 function Write-JsonAtomic([string]$path,$value) {
     $temporary=$path+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
@@ -994,10 +1370,22 @@ function Test-LifecycleEvidence($proof) {
 function Write-Result($r) { $r.CapturedAt=(Get-Date).ToString('o'); Write-JsonAtomic $Analysis $r }
 __ROADMAP_HELPERS__
 
+$IsCetMsi=$InstallerKind -eq 'Msi' -and $script:MsiStaticMetadata.Manufacturer -eq 'Configura Sverige AB' -and
+    $script:MsiStaticMetadata.UpgradeCode -eq '{0D00DF52-730E-4251-A536-B53F18318375}' -and
+    $script:MsiStaticMetadata.ProductName -match '^CET(?:\s|$)'
+$CetHasDataPrompt=$false
+if($IsCetMsi){
+    $SilentOnly=$true
+    $CetHasDataPrompt=@(Get-MsiRemovalUiActions $Installer | Where-Object {
+      $_.Action -eq 'CETShowClearUserDataDialogOnUninstall' -and $_.Condition -eq 'REMOVE AND NOT USED_DATA_ALREADY_REMOVED=1'
+    }).Count -gt 0
+}
+
 $result=[ordered]@{ ValidationSchemaVersion=3; EvidenceCollectionComplete=$false; UiTextEvidence=@(); RuntimeEnvironment=@(); PrerequisiteProbes=@(); PrerequisiteFiles=@(); DetectionStrategies=@(); Components=@(); ProcessTree=@(); NetworkActivity=@(); NewRebootIndicators=@(); PostRebootValidated=$false; InitialInstallValidated=$false; InitialUninstallValidated=$false; InitialUninstallExitCode=$null; CleanBaselineVerified=$false; RebootRequired=$false; SessionId=([guid]::NewGuid().ToString()); InstallerSha256=$null; Installer=[IO.Path]::GetFileName($Installer); InstallerExitCode=-1; CapturedAt=(Get-Date).ToString('o'); NewUninstallEntries=@(); PrimaryKey=$null; UninstallValidationMethod='Discovery only'; UninstallRecordingAttempted=$false; UninstallResponseFileCreated=$false; RecordedUninstallExitCode=$null; BaseSilentArguments=$BaseSilentArguments; AdditionalPackageArguments=$AdditionalPackageArguments; CombinedSilentArguments=$SilentInstallArguments; SilentInstallCommand=('"'+$Installer+'" '+$SilentInstallArguments).Trim(); SilentInstallStdOut=$null; SilentInstallStdErr=$null; SilentReinstallExitCode=$null; SilentReinstallValidated=$false; SilentReinstallUiDetected=$false; SilentReinstallVisibleWindows=@(); SilentUninstallExitCode=$null; SilentUninstallRawExitCode=$null; SilentUninstallUiDetected=$false; SilentUninstallVisibleWindows=@(); UiDiagnostics=@(); SilentStrategyCandidates=@(); SilentStrategyAttempts=@(); SelectedSilentStrategy=$null; PostUninstallDetected=$null; SilentUninstallValidated=$false; DiscoverySucceeded=$false; DiscoveryMethod=$null; DeploymentMechanism=$null; DeploymentSource=$Installer; IdentitySource=$null; UninstallCandidate=$null; ValidationError=$null; BootstrapperProcesses=@(); DiscoveredInstallerFiles=@(); BlockedBundledSoftware=@(); BlockedBundledSoftwareVerifiedAbsent=$null; WorkflowStage='Initial installation / discovery'; WorkflowStageUpdatedAt=(Get-Date).ToString('o'); WorkflowStageHistory=@() }
 # v0.12.7: Strategy Discovery can execute candidates before the later lifecycle section is reached.
 # Keep checkpoint/debug helpers available from the start of analysis so Invoke-InstallCandidate and
 # Invoke-NativeProcess can safely report progress in Silent Only mode.
+$result['ExpectedPrimaryProduct']=$RequiredPrimaryProduct
 $result['NetFx3Provisioning']=[ordered]@{Status='Not required';Evidence='';Detail='';Attempted=$false;Provisioned=$false;RuntimeVerified=$false;RequiresFullWindowsVM=$false;RestartNeeded=$false;ExitCode=$null}
 $checkpoint='C:\InstallerOutput\install-analysis.checkpoint.json'
 $debugLog='C:\InstallerOutput\analysis-debug.jsonl'
@@ -1025,6 +1413,7 @@ function Write-Checkpoint([string]$stage) {
 if($InstallerKind -eq 'Msi'){$result.SilentInstallCommand=('msiexec.exe /i `"'+$Installer+'`" '+$SilentInstallArguments).Trim()}
 if($InstallerKind -eq 'Msix'){$result.SilentInstallCommand=('Add-AppxPackage -Path `"'+$Installer+'`"')}
 try {
+    Ensure-SandboxInstallerCompatibility __SANDBOX_COMPATIBILITY__
     $script:NativeMsiBaselineState=Get-NativeMsiProductState ([string]$script:MsiStaticMetadata.ProductCode)
     $result['MsiProductStateBefore']=$script:NativeMsiBaselineState
     $script:MsiApplicationRegistryBaseline=@(Get-MsiApplicationRegistryBaseline)
@@ -1037,23 +1426,74 @@ try {
     $script:BeforeComponents=Get-ComponentEvidenceSnapshot
     $script:BeforeRebootEvidence=@(Get-PendingRebootEvidence)
     $result.InstallerSha256=(Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash
-    Ensure-NetFx3 ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__NETFX_EVIDENCE__')))
+    $netFxEvidence=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__NETFX_EVIDENCE__'))
+    $script:UseGintPrerequisites=$RequiredPrimaryProduct -eq 'gINT' -and -not [string]::IsNullOrWhiteSpace($netFxEvidence)
+    if($script:UseGintPrerequisites){Ensure-GintWindowsCatalog;Ensure-GintVbScript}
+    Ensure-NetFx3 $netFxEvidence
+    if($IsVirtualBoxReducedProfile){
+      $result.DeploymentMechanism='VirtualBox 7.2.22 core, USB and bridged networking'
+      $SilentInstallArguments=(Get-Content -LiteralPath $VirtualBoxProfileFile -Raw).Trim()
+      $result.CombinedSilentArguments=$SilentInstallArguments
+      $SilentOnly=$true
+      Write-Checkpoint 'VirtualBox: verifying clean driver baseline'
+      Test-VirtualBoxDriverState 'Before install' $false
+      $local=Join-Path $env:TEMP ('IA-VirtualBox-'+[guid]::NewGuid().ToString('N'))
+      New-Item -ItemType Directory -Path $local | Out-Null
+      Copy-Item -LiteralPath $Installer,(Join-Path ($Installer+'.dependencies') 'common.cab'),(Join-Path ($Installer+'.dependencies') 'vc_redist.x64.exe') -Destination $local
+      $VirtualBoxLocalMsi=Join-Path $local ([IO.Path]::GetFileName($Installer))
+      Write-Checkpoint 'VirtualBox: preparing Microsoft Visual C++ x64 prerequisite'
+      $vc=Invoke-NativeProcess (Join-Path $local 'vc_redist.x64.exe') '/install /quiet /norestart /log C:\InstallerOutput\virtualbox-vc-redist.log' $true $true 120
+      if($vc.UiDetected -or $vc.TimedOut -or $vc.ExitCode -notin @(0,1638)){
+        throw ('PREREQUISITE REQUIRED: VirtualBox Visual C++ x64 setup returned '+$vc.ExitCode+'. See virtualbox-vc-redist.log.')
+      }
+      $runtime=@(foreach($view in @('Registry64','Registry32')){
+        $value=Read-RuntimeRegistry 'LocalMachine' $view 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64' @('Installed')
+        if($value.Available -and $value.Values['Installed'] -eq 1){$value}
+      })
+      if(-not $runtime.Count){throw 'PREREQUISITE REQUIRED: VirtualBox Visual C++ x64 registration was not found after setup.'}
+    }
+    $componentEncoded='__COMPONENT_PLAN__'
+    if(-not [string]::IsNullOrWhiteSpace($componentEncoded)){
+      $plan=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($componentEncoded))|ConvertFrom-Json
+      if($plan.SourceSha256 -ne $result.InstallerSha256){throw 'Component recipe source binding failed.'}
+      Write-Checkpoint 'gINT: validating component prerequisites'
+      . 'C:\InstallerInput\component-prerequisites.ps1'
+      $result['ComponentDeployment']=$plan
+      if($script:IAGintReboot){$result.RebootRequired=$true}
+      $Installer='C:\InstallerInput\Payload\gINT.msi';$EffectiveSilentInstaller=$Installer
+      $InstallerKind='Msi';$DiscoveredInstallerKind='Msi';$RecordResponses=$false;$SilentOnly=$true
+      $SilentInstallArguments='/qn /norestart';$BaseSilentArguments=$SilentInstallArguments
+      $result.DeploymentMechanism='Component recipe';$result.DeploymentSource='gINT.msi'
+    }
     Start-PayloadTrace
     if($InstallerKind -eq 'Msix'){
-      $beforePackages=@(Get-AppxPackage | ForEach-Object {$_.PackageFullName})
-      try { Add-AppxPackage -Path $Installer -ErrorAction Stop; $result.InstallerExitCode=0 } catch { throw "MSIX/AppX installation failed: $($_.Exception.Message)" }
+      $packageName=(Get-Content -LiteralPath 'C:\InstallerInput\msix-identity.txt' -Raw).Trim()
+      if($packageName -notmatch '^[A-Za-z0-9.-]+$'){throw 'Invalid MSIX/AppX package identity.'}
+      if(Get-AppxPackage -Name $packageName -PackageTypeFilter Main){throw 'MSIX/AppX target is already present in the baseline. A clean guest is required for lifecycle validation.'}
+      $parameters=@{Path=$Installer;ErrorAction='Stop'}
+      $dependencyFolder=$Installer+'.dependencies'
+      if(Test-Path -LiteralPath $dependencyFolder -PathType Container){
+        $dependencies=@(Get-ChildItem -LiteralPath $dependencyFolder -File | Where-Object Extension -in @('.appx','.msix','.appxbundle','.msixbundle'))
+        if($dependencies.Count){
+          $parameters.DependencyPath=@($dependencies | ForEach-Object FullName)
+          $result['MsixDependencies']=@($dependencies | ForEach-Object {
+            [PSCustomObject]@{FileName=$_.Name;Sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}
+          })
+        }
+      }
+      try { Add-AppxPackage @parameters; $result.InstallerExitCode=0 } catch { throw "MSIX/AppX installation failed: $($_.Exception.Message)" }
       Start-Sleep 4
-      $pkg=Get-AppxPackage | Where-Object {$_.PackageFullName -notin $beforePackages} | Select-Object -First 1
+      $pkg=Get-AppxPackage -Name $packageName -PackageTypeFilter Main | Select-Object -First 1
       if(-not $pkg){throw 'MSIX/AppX package installation completed, but no newly installed package could be identified.'}
       $primary=[PSCustomObject]@{Key=('APPX::'+$pkg.PackageFullName);DisplayName=$pkg.Name;DisplayVersion=$pkg.Version.ToString();Publisher=$pkg.Publisher;InstallLocation=$pkg.InstallLocation;UninstallString=('Remove-AppxPackage -Package '+$pkg.PackageFullName);QuietUninstallString=$null;WindowsInstaller=$null;ProductCode=$pkg.PackageFullName}
       $result.NewUninstallEntries=@($primary); $result.PrimaryKey=$primary.Key; $result.DiscoverySucceeded=$true; $result.DiscoveryMethod='MSIX/AppX package registration'; $result.UninstallValidationMethod='Remove-AppxPackage'; $result.UninstallCandidate=$primary.UninstallString
       Set-InstalledComponentEvidence
-      Initialize-DetectionEvidence $primary @($beforePackages | ForEach-Object {[PSCustomObject]@{ProductCode=$_}})
+      Initialize-DetectionEvidence $primary @()
       Remove-AppxPackage -Package $pkg.PackageFullName -ErrorAction Stop; Start-Sleep 3
       if(Get-AppxPackage -PackageTypeFilter Main,Bundle | Where-Object {$_.PackageFullName -eq $pkg.PackageFullName}){throw 'MSIX/AppX package remained detected after silent uninstall.'}
       $result.InitialInstallValidated=$true; $result.InitialUninstallExitCode=0; $result.InitialUninstallValidated=$true; $result.CleanBaselineVerified=$true
-      try { Add-AppxPackage -Path $Installer -ErrorAction Stop; $result.SilentReinstallExitCode=0 } catch { $result.SilentReinstallExitCode=1; throw "MSIX/AppX silent reinstall failed: $($_.Exception.Message)" }
-      Start-Sleep 3; $current=Get-AppxPackage | Where-Object {$_.Name -eq $pkg.Name} | Select-Object -First 1
+      try { Add-AppxPackage @parameters; $result.SilentReinstallExitCode=0 } catch { $result.SilentReinstallExitCode=1; throw "MSIX/AppX silent reinstall failed: $($_.Exception.Message)" }
+      Start-Sleep 3; $current=Get-AppxPackage -Name $packageName -PackageTypeFilter Main | Where-Object PackageFullName -eq $pkg.PackageFullName | Select-Object -First 1
       $result.SilentReinstallValidated=($null -ne $current)
       if(-not $current){throw 'MSIX/AppX package was not detected after reinstall.'}
       Remove-AppxPackage -Package $current.PackageFullName -ErrorAction Stop; $result.SilentUninstallExitCode=0; Start-Sleep 3
@@ -1067,9 +1507,9 @@ try {
     if($RecordResponses){
       Write-Checkpoint 'Record InstallShield installation response file'
       $recordArguments=('/r /f1"'+$SetupIss+'" '+$AdditionalPackageArguments).Trim()
-      $recorded=Invoke-NativeProcess $Installer $recordArguments $false $false 900
+      $recorded=Invoke-NativeProcess $Installer $recordArguments $false $false 900 -WatchInstallPrerequisites $true
       $result.InstallerExitCode=$recorded.ExitCode
-      if($recorded.TimedOut){throw 'InstallShield recording exceeded the 15-minute timeout.'}
+      if($recorded.TimedOut){throw 'InstallShield recording exceeded its watchdog window.'}
       if($recorded.ExitCode -notin @(0,3010)){throw ('InstallShield recording returned exit code '+$recorded.ExitCode+'.')}
       if(-not (Test-InstallShieldResponse $SetupIss)){throw 'InstallShield did not create a valid setup.iss response file.'}
       $SilentInstallArguments=('/s /f1"'+$SetupIss+'" '+$AdditionalPackageArguments).Trim()
@@ -1081,6 +1521,12 @@ try {
       Set-AnalysisHeartbeat 'strategy-discovery-start'
       $probeCandidates=@(Get-UnattendedProbeCandidates)
       if($InstallerKind -eq 'Msi'){$probeCandidates=@(Get-MsiInstallCandidates)}
+      if($IsWebView2Installer){
+        if(@($result.RuntimeEnvironment | Where-Object {$_.Name -eq 'WebView2 Runtime' -and $_.State -eq 'Registered Evergreen Runtime'}).Count){
+          throw 'Microsoft Edge WebView2 Runtime is already registered in the baseline. A clean guest is required for lifecycle validation.'
+        }
+        $probeCandidates=@((New-InstallCandidate 'Microsoft WebView2 unattended setup' $Installer '/silent /install' 'Exe' 100 'Microsoft documents /silent /install for both Evergreen installer types.'))
+      }
       $result.SilentStrategyCandidates=@($probeCandidates | ForEach-Object {[PSCustomObject]@{Name=$_.Name;Score=$_.Score;File=$_.File;Arguments=$_.Arguments;Reason=$_.Reason}})
       if($probeCandidates.Count -eq 0){throw 'NO SILENT STRATEGY: Strategy Discovery Engine could not generate a safe unattended hypothesis.'}
       $selectedProbe=$null
@@ -1106,6 +1552,30 @@ try {
         $attempt.Outcome='Validated';$attempt.CompletedAt=(Get-Date).ToString('o');$result.SilentStrategyAttempts+=@([PSCustomObject]$attempt);$selectedProbe=$candidate;$primary=$candidatePrimary;$result.InstallerExitCode=$ri.ExitCode;break
       }
       if(-not $selectedProbe){
+        if($IsVirtualBoxReducedProfile){
+          $lastAttempt=$result.SilentStrategyAttempts | Select-Object -Last 1
+          $result.InstallerExitCode=$lastAttempt.ExitCode
+          throw ('INSTALL FAILED: VirtualBox reduced profile did not validate. '+$lastAttempt.Outcome+' See msi-install.log and app-control-evidence.json.')
+        }
+        if($IsWebView2Installer){
+          $lastAttempt=$result.SilentStrategyAttempts | Select-Object -Last 1
+          if($null -ne $lastAttempt.ExitCode -and $lastAttempt.ExitCode -notin @(0,3010)){
+            $result.InstallerExitCode=$lastAttempt.ExitCode
+            $exitHex='0x{0:X8}' -f [int]$lastAttempt.ExitCode
+            $updateLogs=@("$env:ProgramData\Microsoft\EdgeUpdate\Log\MicrosoftEdgeUpdate.log","$env:LOCALAPPDATA\Microsoft\EdgeUpdate\Log\MicrosoftEdgeUpdate.log")
+            $updateFailure=@(foreach($log in $updateLogs){
+              if(Test-Path -LiteralPath $log){
+                Get-Content -LiteralPath $log -Tail 400 -ErrorAction SilentlyContinue |
+                  Where-Object {$_ -match 'InstallApp returned.*F3017226-FE2A-4295-8BDF-00C3A9A7E4C5' -and $_ -like ('*'+$exitHex+'*')} |
+                  Select-Object -Last 1
+              }
+            })
+            if($updateFailure.Count){$updateFailure | Set-Content 'C:\InstallerOutput\webview2-updater-error.txt' -Encoding UTF8}
+            $detail=if($updateFailure -match "couldn't create a temporary directory"){' Edge Update could not create a temporary directory.'}else{''}
+            throw ('INSTALL FAILED: Microsoft Edge WebView2 Runtime setup returned '+$exitHex+' using /silent /install.'+$detail)
+          }
+          throw ('Microsoft Edge WebView2 Runtime did not validate with /silent /install. '+$lastAttempt.Outcome)
+        }
         # v0.12.7: first-generation probes can reveal a vendor bootstrapper's extracted payload even
         # when the probe itself is rejected for UI/exit status. Turn those artifacts into a second
         # generation of MSI/setup candidates instead of giving up on an unfamiliar product.
@@ -1147,8 +1617,10 @@ try {
       if($result.InstallerExitCode -eq 3010){$result.RebootRequired=$true}
     } elseif($InstallerKind -in @('Unknown','Bootstrapper')){
       $p=Start-Process -FilePath $Installer -PassThru
+      $null=$p.Handle
       $activity=Watch-Bootstrapper $p.Id $beforeKeys
-      $result.BootstrapperProcesses=@($activity.Processes); $result.DiscoveredInstallerFiles=@($activity.Files); $primary=$activity.Primary; $new=@($activity.NewEntries)
+      $result.BootstrapperProcesses=@($activity.Processes); $result.DiscoveredInstallerFiles=@($activity.Files); $primary=$activity.Primary; $new=@($activity.NewEntries); $result.NewUninstallEntries=$new
+      Assert-BootstrapperDiscoveryComplete $activity
       try {$p.Refresh(); if($p.HasExited){$result.InstallerExitCode=$p.ExitCode}else{$result.InstallerExitCode=-2}} catch {$result.InstallerExitCode=-2}
       $isClickToRun=Test-ClickToRun $result.BootstrapperProcesses $primary
       if($isClickToRun){
@@ -1188,10 +1660,25 @@ try {
         throw ('Bootstrapper/unknown installer '+$state+' without an identifiable installed application. Relevant processes: '+@($result.BootstrapperProcesses).Count+'; candidate downloaded/extracted installer files: '+@($result.DiscoveredInstallerFiles).Count+'.')
       }
     } else {
+      $launchTime=(Get-Date).ToUniversalTime()
       $p=Start-Process -FilePath $Installer -PassThru
-      $finished=$false; $waitDeadline=(Get-Date).AddMinutes(10)
-      while((Get-Date) -lt $waitDeadline){ Set-AnalysisHeartbeat 'initial-installer-wait'; if($p.WaitForExit(1000)){$finished=$true;break} }
-      $result.InstallerExitCode=if($finished){$p.ExitCode}else{-2}
+      $tracked=New-Object 'System.Collections.Generic.HashSet[int]'; [void]$tracked.Add($p.Id)
+      $births=@{}; $births[[int]$p.Id]=Get-InstallerProcessBirth $p $launchTime
+      $started=Get-Date
+      $clock=@{Deadline=$started.AddMinutes(10);Limit=$started.AddMinutes(50);ApplicationSeconds=600;Waiting=$false;Seen=$false}
+      $finished=$false
+      while((Get-Date) -lt $clock.Deadline){
+        Set-AnalysisHeartbeat 'initial-installer-wait'
+        $all=Update-TrackedProcessTree $tracked $births
+        $prerequisite=Find-TrackedPrerequisite $all $tracked $p.Id
+        Update-InstallWait $clock $prerequisite (Get-Date)
+        if($p.HasExited -and -not $clock.Waiting){
+          if(-not $clock.Seen -or -not @($all | Where-Object {$tracked.Contains([int]$_.ProcessId) -and $_.Name -match '^(?:msiexec|setup|install)' -and $_.CommandLine -notmatch '(?i)(?:^|\s)(?:/V|-Embedding)(?:\s|$)'}).Count){$finished=$true;break}
+        }
+        Start-Sleep -Seconds 1
+      }
+      if(-not $finished){throw 'INSTALL TIMEOUT: Setup did not complete within its watchdog window.'}
+      $result.InstallerExitCode=$p.ExitCode
       for($i=0;$i -lt 12 -and -not $primary;$i++){
         Start-Sleep 3; $after=@(Get-UninstallSnapshot); $new=@($after | Where-Object {$_.Key -notin $beforeKeys}); $primary=Select-Primary $new
         if(-not $primary -and $InstallerKind -eq 'Squirrel'){$primary=Find-SquirrelApplication}
@@ -1223,13 +1710,15 @@ try {
     # Checkpoint/debug helpers are initialized before Strategy Discovery in v0.12.7.
     $result.InitialInstallValidated=$true
     Initialize-DetectionEvidence $primary $before
+    Test-VirtualBoxDriverState 'Initial install' $true
     Write-Checkpoint 'Discovery complete'
 
     Write-Checkpoint 'Build uninstall candidate'
     $initialUninstallDone=$false
-    $uninstallCommand=$primary.QuietUninstallString
+    $uninstallCommand=Get-InnoUninstallCommand ([string]$primary.QuietUninstallString)
+    if(-not $uninstallCommand){$uninstallCommand=Normalize-QSetupUninstallCommand ([string]$primary.QuietUninstallString)}
     if([string]::IsNullOrWhiteSpace($uninstallCommand)){$uninstallCommand=Get-MsiUninstallCommand $primary; if($uninstallCommand){$result.UninstallCandidate=$uninstallCommand;$result.UninstallValidationMethod='MSI ProductCode /x /qn /norestart'}}
-    if([string]::IsNullOrWhiteSpace($uninstallCommand) -and $InstallerKind -eq 'InnoSetup'){$uninstallCommand=Get-InnoUninstallCommand $primary; if($uninstallCommand){$result.UninstallCandidate=$uninstallCommand;$result.UninstallValidationMethod='Inno Setup silent uninstaller'}}
+    if([string]::IsNullOrWhiteSpace($uninstallCommand)){$uninstallCommand=Get-InnoUninstallCommand ([string]$primary.UninstallString); if($uninstallCommand){$result.UninstallCandidate=$uninstallCommand;$result.UninstallValidationMethod='Inno Setup silent uninstaller'}}
     if([string]::IsNullOrWhiteSpace($uninstallCommand) -and $InstallerKind -eq 'Nsis' -and $primary.UninstallString){$uninstallCommand=$primary.UninstallString + ' /S'; $result.UninstallCandidate=$uninstallCommand; $result.UninstallValidationMethod='NSIS /S candidate'}
     elseif([string]::IsNullOrWhiteSpace($uninstallCommand) -and $InstallerKind -eq 'Squirrel' -and $primary.UninstallString){$uninstallCommand=$primary.UninstallString; $result.UninstallCandidate=$uninstallCommand; $result.UninstallValidationMethod='Squirrel Update.exe --uninstall candidate'}
     elseif(-not [string]::IsNullOrWhiteSpace($uninstallCommand) -and $result.UninstallValidationMethod -eq 'Discovery only'){$result.UninstallValidationMethod='QuietUninstallString + detected silent install strategy'}
@@ -1298,6 +1787,7 @@ try {
       if(-not (Test-ProcessResultSuccess $initialExecution)){throw ('Initial silent uninstall returned exit code '+$initialExecution.ExitCode+'. See msi-uninstall-initial.log when available.')}
       $result.RebootRequired=($result.RebootRequired -or $initialExecution.ExitCode -eq 3010)
       if(-not (Wait-ApplicationAbsent $primary 'Initial')){throw 'Application remained detected after the bounded initial-uninstall absence verification.'}
+      Test-VirtualBoxDriverState 'Initial uninstall' $false
       $result.InitialUninstallValidated=$true; $result.CleanBaselineVerified=$true
       Write-Checkpoint 'Initial uninstall verified absent'
       }
@@ -1408,6 +1898,7 @@ try {
       $result.SelectedSilentStrategy=$selected.Name; $EffectiveSilentInstaller=$selected.File; $SilentInstallArguments=$selected.Arguments; $DiscoveredInstallerKind=if($selected.Kind -eq 'Msi'){'Msi'}else{$DiscoveredInstallerKind}
       $result.SilentInstallCommand=if($selected.Kind -eq 'Msi'){('msiexec.exe /i `"'+$selected.File+'`" '+$selected.Arguments).Trim()}else{('"'+$selected.File+'" '+$selected.Arguments).Trim()}
       $result.BaseSilentArguments=$SilentInstallArguments; $result.CombinedSilentArguments=$SilentInstallArguments;
+      Test-VirtualBoxDriverState 'Reinstall' $true
       $result.RebootRequired=($result.RebootRequired -or $ri.ExitCode -eq 3010); $result.SilentReinstallExitCode=$ri.ExitCode; $result.SilentInstallStdOut=''; $result.SilentInstallStdErr=''; $result.SilentReinstallUiDetected=$false; $result.SilentReinstallVisibleWindows=@(); $result.SilentReinstallValidated=$true
 
       $finalCandidates=if($RecordResponses -and $result.UninstallResponseFileCreated){
@@ -1470,7 +1961,12 @@ try {
           Start-Sleep 3
           $result.PostUninstallDetected=Test-Detected $current
           Write-Checkpoint ('Final absence verification '+$absencePoll+'/20: detected='+$result.PostUninstallDetected)
-          if(-not $result.PostUninstallDetected){Complete-RoadmapRemovalEvidence;break}
+          if(-not $result.PostUninstallDetected){
+            Test-VirtualBoxDriverState 'Final uninstall' $false
+            if($IsVirtualBoxReducedProfile){$result['VirtualBoxDriverCleanupVerified']=$true}
+            Complete-RoadmapRemovalEvidence
+            break
+          }
         }
         $result.SilentUninstallValidated=(-not $result.PostUninstallDetected)
         if(-not $result.SilentUninstallValidated){$result.ValidationError='Final uninstall returned success, but the application remained detected after the bounded 60-second absence verification.'}
@@ -1513,12 +2009,14 @@ try { Write-DebugEvent 'Analysis complete; optional cleanup delegated to Sandbox
         {
             ["__INSTALLER__"] = escaped, ["__KIND__"] = kindName, ["__BASE_ARGS__"] = baseSilent,
             ["__ADDITIONAL_ARGS__"] = additional, ["__BLOCK_MCAFEE__"] = blockMcAfee,
+            ["__SANDBOX_COMPATIBILITY__"] = installerCompatibility ? "$true" : "$false",
+            ["__COMPONENT_PLAN__"] = componentPlan is null ? "" : Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(componentPlan)),
             ["__RECORD_RESPONSES__"] = recordResponses ? "$true" : "$false",
-            ["__SILENT_ONLY__"] = silentOnlyValue, ["__ROADMAP_HELPERS__"] = RoadmapEvidenceScript.Replace("__MSI_METADATA__", encodedMsiMetadata) + Environment.NewLine + DetailedDetectionEvidenceScript + Environment.NewLine + RuntimeEnvironmentEvidenceScript + Environment.NewLine + NetFx3ProvisioningScript + Environment.NewLine + MsiIdentityEvidenceScript + Environment.NewLine + PrerequisiteFileEvidenceScript + Environment.NewLine + PrerequisiteServiceEvidenceScript + Environment.NewLine + DllEvidenceScript + Environment.NewLine + AppControlEvidenceScript + Environment.NewLine + PayloadTraceEvidenceScript.Replace("__TRACE_WORKER_B64__", Convert.ToBase64String(Encoding.UTF8.GetBytes(PayloadTraceWorkerScript))),
-            ["__NETFX_EVIDENCE__"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(netFxRequirement)), ["__MSI_METADATA__"] = encodedMsiMetadata
+            ["__SILENT_ONLY__"] = silentOnlyValue, ["__ROADMAP_HELPERS__"] = RoadmapEvidenceScript.Replace("__MSI_METADATA__", encodedMsiMetadata) + Environment.NewLine + DetailedDetectionEvidenceScript + Environment.NewLine + RuntimeEnvironmentEvidenceScript + Environment.NewLine + NetFx3ProvisioningScript + Environment.NewLine + GintPrerequisiteScript + Environment.NewLine + SandboxCompatibilityScript + Environment.NewLine + MsiIdentityEvidenceScript + Environment.NewLine + PrerequisiteFileEvidenceScript + Environment.NewLine + PrerequisiteServiceEvidenceScript + Environment.NewLine + DllEvidenceScript + Environment.NewLine + AppControlEvidenceScript + Environment.NewLine + PayloadTraceEvidenceScript.Replace("__TRACE_WORKER_B64__", Convert.ToBase64String(Encoding.UTF8.GetBytes(PayloadTraceWorkerScript))),
+            ["__REQUIRED_PRIMARY__"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(requiredPrimaryProduct)), ["__NETFX_EVIDENCE__"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(netFxRequirement)), ["__MSI_METADATA__"] = encodedMsiMetadata
         };
         // One pass prevents token-shaped installer names/arguments being substituted as code.
-        return System.Text.RegularExpressions.Regex.Replace(script, "__(?:INSTALLER|KIND|BASE_ARGS|ADDITIONAL_ARGS|BLOCK_MCAFEE|SILENT_ONLY|RECORD_RESPONSES|ROADMAP_HELPERS|MSI_METADATA|NETFX_EVIDENCE)__", match => values[match.Value]);
+        return System.Text.RegularExpressions.Regex.Replace(script, "__(?:INSTALLER|KIND|BASE_ARGS|ADDITIONAL_ARGS|BLOCK_MCAFEE|SILENT_ONLY|RECORD_RESPONSES|ROADMAP_HELPERS|MSI_METADATA|NETFX_EVIDENCE|REQUIRED_PRIMARY|SANDBOX_COMPATIBILITY|COMPONENT_PLAN)__", match => values[match.Value]);
     }
 
     private static string BuildWsb(string input, string output)

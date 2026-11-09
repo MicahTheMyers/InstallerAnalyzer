@@ -21,7 +21,7 @@ public static partial class InstallerCatalogService
     }
 
     private static void RememberDetails(SqliteConnection db, SqliteTransaction transaction, AnalysisResult installer,
-        InstallAnalysis proof, string hash, string arguments, string source, string proofId)
+        InstallAnalysis proof, string hash, string arguments, string source, string proofId, CatalogRecording? recording)
     {
         var primary = proof.NewUninstallEntries.First(e => e.Key == proof.PrimaryKey);
         using var command = db.CreateCommand();
@@ -34,8 +34,13 @@ public static partial class InstallerCatalogService
         detail.Sha256 = hash; detail.Product = primary.DisplayName ?? installer.ProductName;
         detail.ProductFamily = installer.ProductName; detail.Version = primary.DisplayVersion ?? installer.FileVersion;
         detail.Publisher = primary.Publisher ?? installer.CompanyName; detail.Architecture = installer.Architecture;
-        detail.Family = installer.Kind.ToString(); detail.InstallArguments = arguments;
+        detail.Family = proof.ComponentDeployment is not null ? InstallerKind.Bootstrapper.ToString() : installer.Kind.ToString(); detail.InstallArguments = arguments;
         detail.DeploymentSource = installer.FileName; detail.DeploymentMechanism = proof.DeploymentMechanism ?? installer.Kind.ToString();
+        detail.ComponentDeployment = proof.ComponentDeployment;
+        detail.MsixDependencies = proof.MsixDependencies;
+        detail.Recording = recording;
+        if (recording is not null) detail.DeploymentMechanism = RecordingMechanism;
+        detail.SandboxCompatibility = proof.SandboxCompatibility;
         detail.ApplicationIdentity = proof.PrimaryKey ?? ""; detail.LocalInstallerPath = installer.FilePath;
         detail.SigningIdentity = installer.Identity; detail.Origin = "Local validated";
         detail.RebootRequired = proof.RebootRequired; detail.PostRebootValidated = proof.PostRebootValidated;
@@ -50,11 +55,12 @@ public static partial class InstallerCatalogService
         command.Parameters.AddWithValue("$json", JsonSerializer.Serialize(detail, CatalogJson)); command.ExecuteNonQuery();
         var history = new CatalogValidation
         {
-            ProofId = proofId, TimestampUtc = now, AnalyzerVersion = typeof(InstallerCatalogService).Assembly.GetName().Version?.ToString() ?? "",
+            ProofId = proofId, TimestampUtc = now, AnalyzerVersion = UpdateService.CurrentDisplayVersion,
             InstallerSha256 = hash, Source = source, StrategyType = detail.Family, InstallArguments = arguments,
             InstallPassed = LifecycleValidationService.InstallPassed(proof), DetectionPassed = detail.Detection?.Validated == true,
             UninstallPassed = LifecycleValidationService.UninstallPassed(proof), RemovalPassed = proof.PostUninstallDetected == false,
             Confidence = installer.Confidence,
+            Recording = recording, ComponentDeployment = proof.ComponentDeployment, MsixDependencies = proof.MsixDependencies, SandboxCompatibility = proof.SandboxCompatibility,
             DurationSeconds = DateTimeOffset.TryParse(proof.WorkflowStageHistory.FirstOrDefault()?.At, out var start) &&
                 DateTimeOffset.TryParse(proof.CapturedAt, out var finish) ? Math.Max(0, (finish - start).TotalSeconds) : null
         };
@@ -102,7 +108,11 @@ public static partial class InstallerCatalogService
                         row.DeploymentSource = metadata.DeploymentSource; row.LocalInstallerPath = metadata.LocalInstallerPath;
                         row.Detection = metadata.Detection; row.UninstallType = metadata.UninstallType;
                         row.UninstallIdentity = metadata.UninstallIdentity; row.RebootRequired = metadata.RebootRequired;
+                        row.MsixDependencies = metadata.MsixDependencies;
                         row.PostRebootValidated = metadata.PostRebootValidated;
+                        row.Recording = metadata.Recording;
+                        row.ComponentDeployment = metadata.ComponentDeployment;
+                        row.SandboxCompatibility = metadata.SandboxCompatibility ?? new();
                         row.FirstValidatedUtc = metadata.FirstValidatedUtc; row.Failures = metadata.Failures;
                     }
                 }
@@ -132,7 +142,7 @@ public static partial class InstallerCatalogService
         {
             var identity = result.Identity;
             var records = ReadCatalog();
-            var related = records.Where(r => r.Origin == "Local validated" && result.Kind != InstallerKind.Unknown &&
+            var related = records.Where(r => r.Recording is null && r.DeploymentMechanism != RecordingMechanism && r.ComponentDeployment is null && r.DeploymentMechanism != "Component recipe" && r.Origin == "Local validated" && result.Kind != InstallerKind.Unknown &&
                 identity.SignatureValid && r.SigningIdentity.SignatureValid && identity.SignerThumbprint.Length > 0 &&
                 string.Equals(identity.SignerThumbprint, r.SigningIdentity.SignerThumbprint, StringComparison.OrdinalIgnoreCase) &&
                 RelatedProductIdentity(result, r) &&
@@ -140,6 +150,22 @@ public static partial class InstallerCatalogService
                 .OrderByDescending(r => r.LastValidatedUtc).FirstOrDefault();
             var imported = records.FirstOrDefault(r => r.Origin == "Imported candidate" && identity.Sha256.Equals(r.Sha256, StringComparison.OrdinalIgnoreCase));
             var candidate = related ?? imported;
+            if (candidate?.Recording is not null || candidate?.DeploymentMechanism == RecordingMechanism)
+            {
+                if (!ValidRecordingRecord(candidate) || !identity.Sha256.Equals(candidate.Sha256, StringComparison.OrdinalIgnoreCase)) return false;
+                result.NeedsIss = true; result.Kind = InstallerKind.InstallShield; result.SuggestedArguments = "";
+                result.CatalogMatch = "Imported InstallShield recording - not locally validated";
+                result.Evidence.Add("Recorded response files retained as candidate evidence. Fresh Sandbox recording and validation required.");
+                return true;
+            }
+            if (candidate?.ComponentDeployment is not null || candidate?.DeploymentMechanism == "Component recipe")
+            {
+                if (candidate is null || !ValidComponentRecord(candidate) || !string.Equals(identity.Sha256, candidate.Sha256, StringComparison.OrdinalIgnoreCase)) return false;
+                result.SuggestedArguments = "";
+                result.CatalogMatch = "Imported component recipe — not locally validated";
+                result.Evidence.Add("Imported component recipe retains all required attachment hashes. Fresh complete Sandbox validation is required; no local validation or original-EXE arguments are inherited.");
+                return true;
+            }
             if (candidate is null || !SafeArguments(candidate.InstallArguments)) return false;
             result.SuggestedArguments = candidate.InstallArguments;
             if (related is null) result.Kind = Enum.Parse<InstallerKind>(candidate.Family);
@@ -151,6 +177,11 @@ public static partial class InstallerCatalogService
     }
 
     private static bool SafeArguments(string value) => value.Length <= 4096 && value.IndexOfAny(['\r', '\n', '\0', '`', '$']) < 0;
+
+    private static bool ValidComponentRecord(CatalogRecord item) => GintDeploymentPlanService.IsCanonical(item.ComponentDeployment) &&
+        string.Equals(item.Sha256, GintDeploymentPlanService.SourceHash, StringComparison.OrdinalIgnoreCase) &&
+        item.Family == InstallerKind.Bootstrapper.ToString() && item.DeploymentMechanism == "Component recipe" &&
+        item.InstallArguments == "" && string.Equals(item.UninstallIdentity, GintDeploymentPlanService.ProductCode, StringComparison.OrdinalIgnoreCase);
 
     private static bool RelatedProductIdentity(AnalysisResult result, CatalogRecord record)
     {
@@ -190,10 +221,21 @@ public static partial class InstallerCatalogService
                 item.InstallArguments is null || !SafeArguments(item.InstallArguments) || string.IsNullOrWhiteSpace(item.Product) ||
                 item.SigningIdentity is null || item.SigningIdentity.Msi is null || item.History is null || item.History.Any(h => h is null))
                 throw new InvalidDataException("Catalog contains an invalid identity or non-structured strategy.");
+        foreach (var item in transfer.Entries)
+            if ((item.ComponentDeployment is not null || item.DeploymentMechanism == "Component recipe") && !ValidComponentRecord(item))
+                throw new InvalidDataException("Catalog contains an unsupported or altered component recipe.");
+        foreach (var item in transfer.Entries)
+            if ((item.Recording is not null || item.DeploymentMechanism == RecordingMechanism) && !ValidRecordingRecord(item))
+                throw new InvalidDataException("Catalog contains an invalid InstallShield recording.");
+        foreach (var item in transfer.Entries)
+            if (item.History.Any(h => h.Recording is not null && !ValidRecording(h.Recording)))
+                throw new InvalidDataException("Catalog history contains an invalid response file.");
         using var db = Open(); using var transaction = db.BeginTransaction();
         int imported = 0, preserved = 0;
         foreach (var item in transfer.Entries)
         {
+            item.SandboxCompatibility ??= new();
+            foreach (var history in item.History) history.SandboxCompatibility ??= new();
             item.Sha256 = item.Sha256.ToUpperInvariant();
             using var cmd = db.CreateCommand(); cmd.Transaction = transaction;
             cmd.Parameters.AddWithValue("$hash", item.Sha256);

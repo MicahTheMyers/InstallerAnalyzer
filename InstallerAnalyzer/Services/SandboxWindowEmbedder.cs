@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -130,6 +131,7 @@ public static class SandboxWindowEmbedder
         // Never send WM_CLOSE here: Windows Sandbox handles that by showing its own
         // destructive-close confirmation. A user-requested/automatic stop is deliberately
         // forceful because all analysis output has already been copied to the mapped host folder.
+        if (TryStopSandboxEnvironment()) return true;
         var killed = false;
         var pids = new HashSet<int>();
         if (hwnd == IntPtr.Zero) hwnd = FindSandboxWindow();
@@ -161,6 +163,48 @@ public static class SandboxWindowEmbedder
             catch { }
         }
         return killed;
+    }
+
+    private static bool TryStopSandboxEnvironment()
+    {
+        var cli = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Microsoft", "WindowsApps", "wsb.exe");
+        if (!File.Exists(cli)) return false;
+        try
+        {
+            var inventoryInfo = new ProcessStartInfo(cli) { UseShellExecute = false,
+                RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+            inventoryInfo.ArgumentList.Add("list");
+            inventoryInfo.ArgumentList.Add("--raw");
+            using var inventory = Process.Start(inventoryInfo);
+            if (inventory is null) return false;
+            var output = inventory.StandardOutput.ReadToEndAsync();
+            var error = inventory.StandardError.ReadToEndAsync();
+            if (!inventory.WaitForExit(5000))
+            {
+                try { inventory.Kill(); } catch { }
+                return false;
+            }
+            if (inventory.ExitCode != 0 || !output.Wait(1000)) return false;
+            using var json = System.Text.Json.JsonDocument.Parse(output.Result);
+            var environments = json.RootElement.GetProperty("WindowsSandboxEnvironments");
+            if (environments.GetArrayLength() != 1 ||
+                !Guid.TryParse(environments[0].GetProperty("Id").GetString(), out var id)) return false;
+            var stopInfo = new ProcessStartInfo(cli) { UseShellExecute = false,
+                RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+            stopInfo.ArgumentList.Add("stop");
+            stopInfo.ArgumentList.Add("--id");
+            stopInfo.ArgumentList.Add(id.ToString());
+            stopInfo.ArgumentList.Add("--raw");
+            using var stop = Process.Start(stopInfo);
+            if (stop is null) return false;
+            var stopOutput = stop.StandardOutput.ReadToEndAsync();
+            var stopError = stop.StandardError.ReadToEndAsync();
+            if (stop.WaitForExit(10000)) return stop.ExitCode == 0;
+            try { stop.Kill(); } catch { }
+        }
+        catch { }
+        return false;
     }
 
     public static bool CloseSandboxWindow(IntPtr hwnd)

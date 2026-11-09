@@ -29,7 +29,8 @@ internal static class LiveRunnerChecks
                 Field<CancellationTokenSource>("_testModeCts")?.Cancel();
             var status = Field<TextBlock>("TestOverviewText").Text;
             if (status != last) { Console.WriteLine(status); last = status; }
-            if (DateTimeOffset.UtcNow - start > TimeSpan.FromMinutes(15))
+            // Full recording can include two interactive phases before unattended replay.
+            if (DateTimeOffset.UtcNow - start > TimeSpan.FromMinutes(silentOnly ? 15 : 40))
             {
                 Field<CancellationTokenSource>("_testModeCts")?.Cancel();
                 Console.Error.WriteLine("Runner verification timed out; cancellation requested.");

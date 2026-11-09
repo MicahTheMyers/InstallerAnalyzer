@@ -82,7 +82,7 @@ internal static class RoadmapUiChecks
             var lighter = Math.Max(Luminance(text), Luminance(background)); var darker = Math.Min(Luminance(text), Luminance(background));
             check((lighter + .05) / (darker + .05) >= 4.5, theme + " default body text remains readable against the page background");
             foreach (var size in new[] { new Size(1060, 760), new Size(1240, 900), new Size(1600, 1000) })
-                foreach (var pageName in new[] { "AnalyzePage", "TestModePage", "CatalogPage" })
+                foreach (var pageName in new[] { "AnalyzePage", "TestModePage", "CatalogPage", "DattoPage" })
                 {
                     var page = Field<Grid>(pageName); show.Invoke(window, new object[] { page });
                     content.Measure(size); content.Arrange(new Rect(new Point(), size)); content.UpdateLayout();

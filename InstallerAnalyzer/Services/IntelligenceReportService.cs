@@ -239,6 +239,8 @@ public static class IntelligenceReportService
         void Save(string name, object value) => AnalysisArtifactWriter.Write(Path.Combine(folder, name), JsonSerializer.Serialize(value, options));
         Save("prerequisite-results.json", proof.Intelligence.Prerequisites);
         Save("netfx3-provisioning.json", proof.NetFx3Provisioning);
+        Save("sandbox-compatibility.json", proof.SandboxCompatibility);
+        if (proof.ComponentDeployment is not null) Save("component-deployment.json", proof.ComponentDeployment);
         Save("prerequisite-probes.json", proof.PrerequisiteProbes);
         Save("prerequisite-files.json", proof.PrerequisiteFiles);
         Save("dll-file-observations.json", proof.DllFiles);
@@ -321,6 +323,10 @@ public static class IntelligenceReportService
         }
         if (proof.Intelligence.Prerequisites.Count == 0) sb.AppendLine("No prerequisite established by available evidence.");
         sb.AppendLine("\nRUNTIME ENVIRONMENT (availability does not establish an installer requirement)");
+        if (proof.ComponentDeployment is not null)
+            sb.AppendLine($"Component deployment recipe: {proof.ComponentDeployment.Recipe}; {proof.ComponentDeployment.Files.Count} required payload files.");
+        if (proof.SandboxCompatibility.Requested)
+            sb.AppendLine($"Sandbox installer compatibility: {proof.SandboxCompatibility.Status}\n{proof.SandboxCompatibility.Detail}");
         foreach (var observation in proof.RuntimeEnvironment)
             sb.AppendLine($"{observation.Phase}: {observation.Name} • {observation.State} • {observation.Version} • {observation.Architecture}\n{observation.Source}");
         sb.AppendLine("\nSTRATEGY ATTEMPTS");

@@ -2,6 +2,8 @@ namespace InstallerAnalyzer.Models;
 
 public sealed class CatalogValidation
 {
+    public List<MsixDependency> MsixDependencies { get; set; } = new();
+    public CatalogRecording? Recording { get; set; }
     public string ProofId { get; set; } = "";
     public string TimestampUtc { get; set; } = "";
     public string AnalyzerVersion { get; set; } = "";
@@ -15,10 +17,14 @@ public sealed class CatalogValidation
     public bool RemovalPassed { get; set; }
     public double? DurationSeconds { get; set; }
     public int Confidence { get; set; }
+    public ComponentDeploymentPlan? ComponentDeployment { get; set; }
+    public SandboxCompatibilityEvidence SandboxCompatibility { get; set; } = new();
 }
 
 public sealed class CatalogRecord
 {
+    public List<MsixDependency> MsixDependencies { get; set; } = new();
+    public CatalogRecording? Recording { get; set; }
     public string Sha256 { get; set; } = "";
     public string Product { get; set; } = "";
     public string ProductFamily { get; set; } = "";
@@ -29,6 +35,8 @@ public sealed class CatalogRecord
     public string InstallArguments { get; set; } = "";
     public string DeploymentSource { get; set; } = "";
     public string DeploymentMechanism { get; set; } = "";
+    public ComponentDeploymentPlan? ComponentDeployment { get; set; }
+    public SandboxCompatibilityEvidence SandboxCompatibility { get; set; } = new();
     public string ApplicationIdentity { get; set; } = "";
     public string LocalInstallerPath { get; set; } = "";
     public InstallerIdentity SigningIdentity { get; set; } = new();
@@ -43,7 +51,7 @@ public sealed class CatalogRecord
     public bool PostRebootValidated { get; set; }
     public string Origin { get; set; } = "Local validated";
     public List<CatalogValidation> History { get; set; } = new();
-    public string Display => $"{Product} • {Version} • {Family} • {Validations} local validations • {Origin}";
+    public string Display => $"{Product} • {Version} • {(Recording is not null ? "Recorded InstallShield" : ComponentDeployment is null ? Family : "Component recipe")} • {Validations} local validations • {Origin}";
 }
 
 public sealed class CatalogTransfer

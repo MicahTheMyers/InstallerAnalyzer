@@ -11,6 +11,8 @@ internal static class ResponseFileChecks
         var installer=Path.Combine(folder,"setup.exe");File.WriteAllText(installer,"inert fixture; never executed");
         var analysis=new AnalysisResult {FilePath=installer,Kind=InstallerKind.InstallShield,NeedsIss=true};
         File.WriteAllText(Path.Combine(folder,"Install.ps1"),ImmyBotScriptGenerator.Generate(analysis,"/s","Fixture"));
+        File.WriteAllText(Path.Combine(folder,"Wrapped-Install.ps1"),ImmyBotScriptGenerator.Generate(analysis,
+            "/s /a /s /f1\"C:\\InstallerOutput\\setup.iss\" /f2\"C:\\InstallerOutput\\replay.log\" /tag=O'Brien{fixture}","Fixture"));
         var entry=new UninstallEntry {DisplayName="Fixture",UninstallString="\"C:\\Program Files\\Fixture\\uninstall.exe\""};
         var proof=new InstallAnalysis {SilentUninstallValidated=true,UninstallResponseFileCreated=true};
         File.WriteAllText(Path.Combine(folder,"Uninstall.ps1"),ImmyBotScriptGenerator.GenerateUninstall(entry,"Fixture",proof));

@@ -1,18 +1,39 @@
 using System.IO;
+using System.Text.RegularExpressions;
 using InstallerAnalyzer.Models;
 namespace InstallerAnalyzer.Services;
 public static class ImmyBotScriptGenerator
 {
-    public static string Generate(AnalysisResult r, string arguments, string appName)
+    public static string Generate(AnalysisResult r, string arguments, string appName, InstallAnalysis? proof = null)
     {
         appName = string.IsNullOrWhiteSpace(appName) ? Path.GetFileNameWithoutExtension(r.FilePath) : appName.Trim();
+        arguments ??= "";
         if (r.Kind == InstallerKind.Msix)
         {
+            var dependencySetup = "";
+            var dependencyArgument = "";
+            if (proof?.MsixDependencies is { Count: > 0 } dependencies)
+            {
+                var evidence = string.Join(Environment.NewLine, dependencies.Select(dependency =>
+                    $"    @{{ FileName = '{dependency.FileName.Replace("'", "''")}'; Sha256 = '{dependency.Sha256.Replace("'", "''")}' }}"));
+                dependencySetup = $$"""
+$DependencyPath = foreach ($Dependency in @(
+{{evidence}}
+)) {
+    $Path = Join-Path ($Installer + '{{MsixDependencyService.Suffix}}') $Dependency.FileName
+    if ((Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop).Hash -ne $Dependency.Sha256) {
+        throw "MSIX dependency changed since validation: $($Dependency.FileName)"
+    }
+    $Path
+}
+"""+Environment.NewLine;
+                dependencyArgument = " -DependencyPath @($DependencyPath)";
+            }
             return $$"""
 $Installer = $InstallerFile
 if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) { throw "Installer was not found at: $Installer" }
 Write-Host "Installing {{appName}} MSIX/AppX package..."
-Add-AppxPackage -Path $Installer -ErrorAction Stop
+{{dependencySetup}}Add-AppxPackage -Path $Installer{{dependencyArgument}} -ErrorAction Stop
 Write-Host "{{appName}} package installation completed successfully."
 """;
         }
@@ -28,7 +49,7 @@ if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) {
     throw "Installer was not found at: $Installer"
 }
 
-$Arguments = "/i `"$Installer`" {{arguments}}"
+$Arguments = '/i "' + $Installer + '" ' + '{{arguments.Replace("'", "''")}}'
 Write-Host "Starting {{appName}} installation..."
 $Process = Start-Process -FilePath "msiexec.exe" -ArgumentList $Arguments -Wait -PassThru
 Write-Host "{{appName}} installer exited with code $($Process.ExitCode)"
@@ -41,8 +62,13 @@ switch ($Process.ExitCode) {
 """;
         }
 
+        // Preserve the tested launcher's switches, while rebinding response files to
+        // the exported package instead of retaining disposable Sandbox paths.
+        var responseArguments = Regex.Replace(arguments, @"(?i)(?<!\S)/f[12](?:""[^""]*""|\S+)", "").Trim();
+        responseArguments = Regex.Replace(responseArguments, @"(?i)(?<!\S)/r(?=\s|$)", "").Trim();
+        if (!Regex.IsMatch(responseArguments, @"(?i)(?<!\S)/s(?=\s|$)")) responseArguments = ("/s " + responseArguments).Trim();
         var argumentLine = r.NeedsIss
-            ? "$Arguments = '/s /f1\"{0}\"' -f $ResponseFile"
+            ? "$Arguments = '" + responseArguments.Replace("'", "''") + "' + ' /f1\"' + $ResponseFile + '\"'"
             : "$Arguments = '" + arguments.Replace("'", "''") + "'";
 
         var response = r.NeedsIss ? """
@@ -105,7 +131,15 @@ switch ($Process.ExitCode) {
             return $"$Package = Get-AppxPackage -Name '{packageName}' -ErrorAction SilentlyContinue\nif ($Package) {{ Remove-AppxPackage -Package $Package.PackageFullName -ErrorAction Stop }}";
         }
         if (IsWindowsInstallerEntry(e) && !string.IsNullOrWhiteSpace(e.ProductCode))
-            return $"$Arguments = '/x {e.ProductCode} /qn /norestart'\n$Process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $Arguments -Wait -PassThru\nif ($Process.ExitCode -notin @(0, 1605, 3010)) {{ throw '{appName} uninstall failed with exit code ' + $Process.ExitCode }}";
+        {
+            var arguments = $"/x {e.ProductCode} /qn /norestart";
+            var prefix = "msiexec.exe " + arguments;
+            var command = analysis?.UninstallCandidate;
+            if (analysis?.SilentUninstallValidated == true &&
+                command?.StartsWith(prefix + " ", StringComparison.OrdinalIgnoreCase) == true)
+                arguments = command["msiexec.exe ".Length..];
+            return $"$Arguments = '{arguments.Replace("'", "''")}'\n$Process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $Arguments -Wait -PassThru\nif ($Process.ExitCode -notin @(0, 1605, 3010)) {{ throw '{appName} uninstall failed with exit code ' + $Process.ExitCode }}";
+        }
         if (analysis?.SilentUninstallValidated == true && analysis.UninstallResponseFileCreated && !string.IsNullOrWhiteSpace(e.UninstallString))
         {
             var validatedUninstallCommand = e.UninstallString.Replace("'", "''");
@@ -130,12 +164,16 @@ if ([string]::IsNullOrWhiteSpace($UninstallResponseFile) -or -not (Test-Path -Li
 }
 Write-Host "Uninstall response file: $UninstallResponseFile"
 
-$BaseCommand = @'
-{{validatedUninstallCommand}}
-'@
-$Command = '{0} /s /f1"{1}"' -f $BaseCommand.Trim(), $UninstallResponseFile
+$BaseCommand = '{{validatedUninstallCommand}}'
+if ($BaseCommand -match '^\s*"([^"]+)"\s*(.*)$' -or $BaseCommand -match '^\s*([^\s"]+)\s*(.*)$') {
+    $UninstallExecutable = $Matches[1]
+    $UninstallArguments = $Matches[2]
+} else {
+    throw 'Unable to separate the recorded uninstall executable and arguments.'
+}
+$Arguments = $UninstallArguments + ' /s /f1"' + $UninstallResponseFile + '"'
 Write-Host "Starting validated silent uninstall for {{appName}}..."
-$Process = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', $Command -Wait -PassThru
+$Process = Start-Process -FilePath $UninstallExecutable -ArgumentList $Arguments -Wait -PassThru
 if ($Process.ExitCode -notin @(0, 1605, 3010)) { throw "{{appName}} uninstall failed with exit code $($Process.ExitCode)" }
 """;
         }

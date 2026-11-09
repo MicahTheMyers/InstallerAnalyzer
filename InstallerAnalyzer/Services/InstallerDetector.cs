@@ -2,6 +2,7 @@ using System.IO;
 using System.Diagnostics;
 using System.Reflection.PortableExecutable;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.IO.Compression;
 using System.Xml.Linq;
 using InstallerAnalyzer.Models;
@@ -60,6 +61,17 @@ public sealed class InstallerDetector
         }
         var vi = FileVersionInfo.GetVersionInfo(path);
         r.ProductName = vi.ProductName ?? ""; r.CompanyName = vi.CompanyName ?? ""; r.FileVersion = vi.FileVersion ?? ""; r.Architecture = GetArchitecture(path);
+        if (string.Equals(r.CompanyName.Trim(), "Microsoft Corporation", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(vi.OriginalFilename, "MicrosoftEdgeUpdateSetup.exe", StringComparison.OrdinalIgnoreCase) &&
+            Regex.IsMatch(Path.GetFileName(path), @"^MicrosoftEdgeWebView2(?:Setup|RuntimeInstaller(?:X64|X86|ARM64))\.exe$", RegexOptions.IgnoreCase))
+        {
+            r.Kind = InstallerKind.Bootstrapper;
+            r.Confidence = 95;
+            r.ProductName = "Microsoft Edge WebView2 Runtime";
+            r.SuggestedArguments = "/silent /install";
+            r.Evidence.Add("Microsoft Edge WebView2 Runtime setup uses the documented /silent /install command.");
+            return r;
+        }
 
         // Scan the ENTIRE installer in chunks. v0.1 only scanned the first 64 MiB,
         // which misses signatures in large bootstrapper EXEs such as Settle3 (~360 MiB).
@@ -137,6 +149,12 @@ public sealed class InstallerDetector
             Hit(InstallerKind.InstallShield, 15, "InstallShield response-file marker detected.");
 
         var meta = $"{r.ProductName} {r.CompanyName}";
+        var bentley = BentleyBootstrapperService.Inspect(path, r.CompanyName);
+        if (bentley is not null)
+        {
+            Hit(InstallerKind.Bootstrapper, 95, "Bentley prerequisite bootstrapper: version company metadata plus a bounded PE-resource CAB directory containing Settings.ini, PrereqInst32.exe and an MSI payload.");
+            r.Evidence.Add("Embedded MSI payload: " + string.Join(", ", bentley.Files.Where(f => f.Name.EndsWith(".msi", StringComparison.OrdinalIgnoreCase)).Select(f => f.Name)) + ". Payload names establish packaging, not successful installation or prerequisite requirements.");
+        }
         // NVIDIA App stores some product signatures as UTF-16 resources, while the outer SFX
         // exposes a reliable ASCII "7z SFX" marker. Combine that container fingerprint with
         // signed/version metadata instead of treating incidental compatibility strings as InstallShield.
@@ -157,7 +175,13 @@ public sealed class InstallerDetector
                 || Path.GetFileName(path).Contains("Acrobat", StringComparison.OrdinalIgnoreCase));
         var adobeBootstrapperEvidence = Has(found, "Adobe Bootstrapper Application")
             || Has(found, "ADOBE APPLICATION Manager") || Has(found, "Adobe_Download_");
-        if (adobeMetadata && adobeBootstrapperEvidence)
+        var adobeOfflineReader = AdobeReaderInstaller.IsOfflinePackage(path, vi);
+        if (adobeOfflineReader)
+        {
+            Hit(InstallerKind.Bootstrapper, 95, "Adobe Reader offline self-extractor metadata detected.");
+            r.ProductName = "Adobe Acrobat Reader";
+        }
+        else if (adobeMetadata && adobeBootstrapperEvidence)
         {
             Hit(InstallerKind.Bootstrapper, 95, "Adobe Acrobat/Reader bootstrapper signature and Adobe metadata detected.");
             r.ProductName = "Adobe Acrobat/Reader Bootstrapper";
@@ -227,7 +251,11 @@ public sealed class InstallerDetector
             r.Evidence.Add("QSetup has native unattended switches; an InstallShield .iss response file is not required.");
             r.Evidence.Add("QSetup /Hide lifecycle strategy is Sandbox validated; package-specific parameters may still be required.");
         }
-        else if (r.Kind == InstallerKind.Bootstrapper && adobeMetadata && adobeBootstrapperEvidence)
+        else if (r.Kind == InstallerKind.Bootstrapper && bentley is not null)
+        {
+            r.Evidence.Add("Bentley bootstrapper detected. No silent switches, standalone-MSI portability or InstallShield response-file requirement are assumed; Sandbox must validate the deployment strategy.");
+        }
+        else if (r.Kind == InstallerKind.Bootstrapper && (adobeOfflineReader || (adobeMetadata && adobeBootstrapperEvidence)))
         {
             r.Evidence.Add("Adobe bootstrapper detected. Silent deployment arguments are intentionally withheld until Windows Sandbox validates the vendor strategy.");
         }
@@ -247,6 +275,15 @@ public sealed class InstallerDetector
             InstallerKind.InstallShield => "/s",
             _ => ""
         };
+        if (r.Kind == InstallerKind.InnoSetup &&
+            string.Equals(r.ProductName.Trim(), "Visual Studio Code", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(r.CompanyName.Trim(), "Microsoft Corporation", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(vi.FileDescription?.Trim(), "Visual Studio Code Setup", StringComparison.OrdinalIgnoreCase))
+        {
+            // The default Inno task can launch Code.exe even during silent setup.
+            r.SuggestedArguments += " /MERGETASKS=!runcode";
+            r.Evidence.Add("Visual Studio Code silent setup skips launching the editor after installation.");
+        }
         return r;
     }
 
@@ -257,11 +294,7 @@ public sealed class InstallerDetector
         r.Evidence.Add("MSIX/AppX deployment uses Add-AppxPackage; InstallShield response files are not applicable.");
         try
         {
-            using var zip = ZipFile.OpenRead(path);
-            var manifest = zip.GetEntry("AppxManifest.xml") ?? zip.GetEntry("AppxMetadata/AppxBundleManifest.xml");
-            if (manifest is null) return;
-            using var stream = manifest.Open(); var doc = XDocument.Load(stream);
-            var identity = doc.Descendants().FirstOrDefault(x => x.Name.LocalName == "Identity");
+            var identity = ReadMsixIdentity(path);
             if (identity is not null)
             {
                 r.ProductName = identity.Attribute("Name")?.Value ?? Path.GetFileNameWithoutExtension(path);
@@ -271,6 +304,15 @@ public sealed class InstallerDetector
             }
         }
         catch (Exception ex) { r.ProductName = Path.GetFileNameWithoutExtension(path); r.Architecture = "MSIX/AppX"; r.Evidence.Add("Package manifest could not be read during static analysis: " + ex.Message); }
+    }
+
+    internal static XElement? ReadMsixIdentity(string path)
+    {
+        using var zip = ZipFile.OpenRead(path);
+        var manifest = zip.GetEntry("AppxManifest.xml") ?? zip.GetEntry("AppxMetadata/AppxBundleManifest.xml");
+        if (manifest is null) return null;
+        using var stream = manifest.Open();
+        return XDocument.Load(stream).Root?.Elements().FirstOrDefault(element => element.Name.LocalName == "Identity");
     }
 
     private static bool Has(HashSet<string> found, string marker) => found.Contains(marker);

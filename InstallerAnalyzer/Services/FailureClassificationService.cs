@@ -22,6 +22,8 @@ public static class FailureClassificationService
         if (outcome == "STOPPED") { category = FailureCategory.Cancelled; owner = "User"; }
         else if (outcome == "NOT TESTED") { category = FailureCategory.NotTested; owner = "Unknown"; }
         else if (hostStage == "Static analysis") { category = FailureCategory.AnalyzerInfrastructureFailure; owner = "Analyzer"; }
+        else if (proof?.SandboxCompatibility.Status == "Failed")
+        { category = FailureCategory.SandboxStartupFailure; owner = "Sandbox"; }
         else if (AppControlEvidenceService.HasConfirmedBlock(proof))
         { category = FailureCategory.ApplicationControlBlocked; owner = "Environment"; }
         else if (proof?.NetFx3Provisioning.RestartNeeded == true)
@@ -87,11 +89,12 @@ public static class FailureClassificationService
         };
         return new()
         {
-            Category = category, Owner = owner, Explanation = explanation, TechnicalReason = reason,
+            Category = category, Owner = owner, Explanation = proof?.SandboxCompatibility.Status == "Failed" ? proof.SandboxCompatibility.Detail : explanation, TechnicalReason = reason,
             Stage = stage, ExitCode = proof?.NetFx3Provisioning.RequiresFullWindowsVM == true || proof?.NetFx3Provisioning.Blocked == true ? proof.NetFx3Provisioning.ExitCode : removal ? proof?.SilentUninstallExitCode ?? proof?.InitialUninstallExitCode :
                 proof?.SilentReinstallExitCode ?? proof?.InstallerExitCode,
             Candidate = proof?.SelectedSilentStrategy, Process = RelevantProcess(proof),
-            NextInvestigation = category == FailureCategory.ApplicationControlBlocked ? "Inspect the blocked file and enforcing policy in app-control-evidence.json; check vendor-supported packages and administrator-reviewed policy decisions." :
+            NextInvestigation = proof?.SandboxCompatibility.Status == "Failed" ? "Inspect sandbox-compatibility.json and sandbox-compatibility-refresh.txt. Retry in a fresh Sandbox or turn off legacy installer compatibility in Settings." :
+                category == FailureCategory.ApplicationControlBlocked ? "Inspect the blocked file and enforcing policy in app-control-evidence.json; check vendor-supported packages and administrator-reviewed policy decisions." :
                 proof?.NetFx3Provisioning.Blocked == true ? "Inspect netfx3-install.txt, netfx3-source.json and netfx3-provisioning.json; verify access to the matching Microsoft feature source before retrying." :
                 owner is "Sandbox" or "Analyzer" ? "Inspect Sandbox startup, heartbeat and host diagnostics before changing installer strategies." :
                 category == FailureCategory.UninstallerUiDetected ? "Inspect uninstall strategy attempts and MSI custom actions." :

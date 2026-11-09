@@ -45,6 +45,10 @@ internal static class RoadmapChecks
             check(!LifecycleValidationService.CanPromoteCheckpoint(recovery) && !LifecycleValidationService.IsComplete(recovery), "Host cannot promote a schema-3 lifecycle before evidence collection completes");
             recovery.EvidenceCollectionComplete = true;
             check(LifecycleValidationService.CanPromoteCheckpoint(recovery) && LifecycleValidationService.IsComplete(recovery), "Host recovery remains available after final evidence has been written");
+            recovery.DeploymentMechanism = VirtualBoxReducedProfile.Mechanism;
+            check(!LifecycleValidationService.CanPromoteCheckpoint(recovery) && !LifecycleValidationService.IsComplete(recovery), "VirtualBox profile requires independent driver cleanup evidence");
+            recovery.VirtualBoxDriverCleanupVerified = true;
+            check(LifecycleValidationService.CanPromoteCheckpoint(recovery) && LifecycleValidationService.IsComplete(recovery), "VirtualBox profile can pass when lifecycle and driver cleanup are established");
             var clone = JsonSerializer.Deserialize<InstallAnalysis>(JsonSerializer.Serialize(proof))!; clone.SessionId = "second";
             check(InstallerCatalogService.Remember(installer, clone, "Retest"), "Independent proof adds history");
             var replay = JsonSerializer.Deserialize<InstallAnalysis>(JsonSerializer.Serialize(proof))!;
@@ -163,8 +167,9 @@ internal static class RoadmapChecks
                 check(archive.Entries.Any(e => e.FullName == "manifest.json"), "Diagnostic bundle records included and omitted evidence");
                 check(archive.Entries.Count(e => e.FullName.EndsWith("iss-install-replay.log") || e.FullName.EndsWith("iss-uninstall-replay.log")) == 2,
                     "Diagnostic export preserves successful and failed InstallShield replay logs");
-                check(archive.Entries.Count(e => Path.GetFileName(e.FullName).Contains("_sandbox-", StringComparison.Ordinal)) == 3,
+                check(archive.Entries.Count(e => new[] { "sandbox-host-startup.json", "sandbox-guest-startup.json", "sandbox-guest-startup-error.txt" }.Any(name => e.FullName.EndsWith(name, StringComparison.Ordinal))) == 3,
                     "Diagnostic export preserves host startup, guest bootstrap and guest script failure evidence");
+                check(archive.Entries.Any(e => e.FullName.EndsWith("sandbox-compatibility.json")), "Diagnostic export retains the guest compatibility environment evidence");
                 check(archive.Entries.Any(e => e.FullName.EndsWith("app-control-evidence.json")), "Diagnostic export retains normalized App Control evidence");
             }
             var missing = new RegressionTestRecord { ArtifactFolder = Path.Combine(folder, "missing") };

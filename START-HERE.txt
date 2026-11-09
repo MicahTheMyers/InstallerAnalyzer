@@ -1,6 +1,4 @@
-Installer Analyzer latest development source
-0.12.10-sandbox-netfx3-fix-20261101
-Base application version: 0.12.10. This is an unsigned development snapshot.
+Installer Analyzer v0.13.27 source
 
 QUICK START ON WINDOWS X64
 1. Extract this entire ZIP into a folder.
@@ -18,57 +16,4 @@ InstallShield responses. Recording phases require wizard interaction; the
 subsequent replay phases must complete unattended. No product license or
 activation test is included in the recording acceptance.
 
-LATEST CHANGES AND LIMITS
-Sandbox-NetFx3-Fix adds guest-only repair of matching missing .NET resource
-components and the exact Sandbox update placeholder, plus a hash-verified
-Microsoft NetFx3 source download on supported x64 builds. Fresh Sandbox runtime
-verification passed; a separate VM is no longer required for this case.
-See outputs\NETFX3-SANDBOX-INVESTIGATION.md for evidence and build limits.
-Windows build 28000+ still requires a separately provisioned standalone runtime.
-
-Taskbar-Fix snapshots constrain maximized windows to the current monitor's
-usable work area so the taskbar does not clip the footer. Version 0.12.10.
-See outputs\MAXIMIZED-TASKBAR-FIX.md.
-
-Claude-Assistant snapshots add Claude (Anthropic) under Settings > AI Assist,
-with a separate Windows-protected API key and model selection. Enable Test Mode
-and AI Assist, choose Claude, enter a model ID available to your Anthropic API
-account, and save its API key. Requests remain read-only and explicit-send only.
-API usage is billed separately from chat subscriptions. No live API call was
-used in acceptance; see outputs\CLAUDE-READONLY-ASSISTANT.md.
-
-Includes the shared schema-3 InstallShield recording engine, response/log
-validation and diagnostic replay logs, plus earlier updater/security,
-prerequisite, payload and BITS work. 747 automated checks passed in the source
-workspace: 565 .NET/WPF and 182 PowerShell. The live Analyzer-created recording
-still needs complete interactive recording and unattended lifecycle acceptance.
-
-Startup-Performance snapshots also skip approximately 10 seconds of unnecessary
-cleanup on confirmed empty Sandbox sessions, load hidden histories on navigation,
-and defer automatic update checks until after the first rendered frame.
-See outputs\STARTUP-PERFORMANCE.md for the exact measured scope and limits.
-
-Startup-Readiness snapshots include those optimizations, a three-minute startup
-budget, visible startup progress, and preserved host/guest startup errors.
-See outputs\STARTUP-READINESS.md. A visible desktop alone is not analysis proof.
-
-The Sandbox graphics workaround under Verification is OPTIONAL and UNPROVEN.
-Do not run it on the new machine unless that machine has the same display
-problem. It is not part of building or launching Installer Analyzer.
-
-App-Control snapshots classify correlated enforced Code Integrity blocks and
-export bounded diagnostic evidence. Installer Sandboxes use software graphics.
-Verification catalog helpers are manual disposable-guest experiments, never
-automatic application repairs. No Windows catalog or vendor installer is bundled.
-See outputs\APP-CONTROL-AND-RECORDING.md for the live evidence and open milestone.
-
-See ROADMAP-STATUS.md, ROADMAP-ACCEPTANCE.md and outputs reports for exact scope.
-Historical fixture scripts may refer to the original machine's D: USB drive,
-artifact pointers or test inputs. Those are not required to build the app;
-vendor installers, private keys, local databases and runtime outputs are absent.
-
-BUILD AND CHECK FROM A TERMINAL
-dotnet build Verification\Verification.csproj -c Release
-dotnet run --project Verification\Verification.csproj -c Release --no-build -- verification-results\local-checks
-
-PACKAGE-MANIFEST.json contains the SHA-256 of each packaged source file.
+See InstallerAnalyzer/docs/releases/v0.13.27.md for changes and validation.

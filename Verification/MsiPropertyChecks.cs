@@ -46,5 +46,10 @@ internal static class MsiPropertyChecks
         using var archive=ZipFile.OpenRead(zip);
         check(archive.Entries.Any(e=>e.FullName.EndsWith("msi-property-observations.json")) && archive.Entries.Any(e=>e.FullName.EndsWith("prerequisite-services.json")),"Diagnostic exports include property and service evidence");
         check(MsiLogPropertyService.Read(Path.Combine(folder,"not-present.log"),metadata).Single().Properties.Count==0,"Unavailable property logs cannot create observations");
+        File.WriteAllText(Path.Combine(folder,"msi-install.log"),new string('x',4*1024*1024+1));
+        IntelligenceReportService.Enrich(proof,installer,folder);
+        check(proof.MsiPropertySnapshots.Single().Properties.Count==0 &&
+            proof.MsiPropertySnapshots.Single().Status.Contains("bounded read limits"),
+            "An oversized MSI log leaves optional properties unknown without blocking report enrichment");
     }
 }

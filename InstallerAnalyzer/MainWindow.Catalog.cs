@@ -31,7 +31,7 @@ public partial class MainWindow
     {
         var text = CatalogSearchBox.Text.Trim();
         CatalogList.ItemsSource = _catalogRecords.Where(r => text.Length == 0 ||
-            $"{r.Product} {r.Version} {r.Publisher} {r.Family} {r.Sha256} {r.Origin}".Contains(text, StringComparison.OrdinalIgnoreCase)).ToList();
+            $"{r.Product} {r.Version} {r.Publisher} {r.Family} {r.Sha256} {r.Origin} {r.ComponentDeployment?.Recipe}".Contains(text, StringComparison.OrdinalIgnoreCase)).ToList();
     }
     private void CatalogSelection_Changed(object sender, SelectionChangedEventArgs e)
     {
@@ -41,12 +41,27 @@ public partial class MainWindow
         sb.AppendLine($"Signature: {row.SigningIdentity.SignatureStatus}\nSigner: {row.SigningIdentity.SignerSubject}\nCertificate: {row.SigningIdentity.SignerThumbprint}");
         if (row.Family == "Msi") sb.AppendLine($"MSI ProductCode: {row.SigningIdentity.Msi.ProductCode}\nUpgradeCode: {row.SigningIdentity.Msi.UpgradeCode}");
         sb.AppendLine($"\nDeployment source: {row.DeploymentSource}\nDeployment mechanism: {row.DeploymentMechanism}\nApplication identity: {row.ApplicationIdentity}");
+        if (row.ComponentDeployment is { } components)
+        {
+            sb.AppendLine($"\nComponent recipe: {components.Recipe}\nOriginal source SHA-256: {components.SourceSha256}\nRequired attachments:");
+            foreach (var file in components.Files) sb.AppendLine($"{file.Key}\n  SHA-256: {file.Value}");
+            sb.AppendLine("Export the complete recipe from Deployment > Datto RMM after fresh Sandbox validation.");
+        }
+        if (row.Recording is { } recording)
+        {
+            sb.AppendLine($"\nRecorded InstallShield response files retained:\nsetup.iss SHA-256: {recording.Setup.Sha256}\nuninstall.iss SHA-256: {recording.Uninstall.Sha256}");
+            sb.AppendLine("Catalog export and backup include the response file bytes. Fresh Sandbox recording and validation are required for retests.");
+        }
+        if (row.SandboxCompatibility.Requested) sb.AppendLine($"Sandbox compatibility: {row.SandboxCompatibility.Status}\n{row.SandboxCompatibility.Detail}");
         sb.AppendLine($"\nInstall arguments: {row.InstallArguments}\nDetection: {row.Detection?.Type ?? "No independently validated strategy recorded"}");
         if (row.Detection is { } detection) sb.AppendLine($"{detection.Identity}\nBefore / installed / removed: {detection.BeforeInstall} / {detection.AfterInstall} / {detection.AfterUninstall}");
         sb.AppendLine($"Uninstall: {row.UninstallType} • {row.UninstallIdentity}\n\nFirst validated: {row.FirstValidatedUtc}\nLast validated: {row.LastValidatedUtc}\nLocal validations: {row.Validations}\nRecorded failed retests: {row.Failures}\n\nValidation history:");
         sb.AppendLine($"Reboot required: {row.RebootRequired}; Post-reboot validation: {row.PostRebootValidated}\n");
         foreach (var entry in row.History.OrderByDescending(h => h.TimestampUtc))
+        {
             sb.AppendLine($"{entry.TimestampUtc} • v{entry.AnalyzerVersion} • {entry.Source}\n{entry.StrategyType} {entry.InstallArguments}\nInstall {entry.InstallPassed}, Detection {entry.DetectionPassed}, Uninstall {entry.UninstallPassed}, Removal {entry.RemovalPassed}\nElapsed {entry.DurationSeconds?.ToString("F1") ?? "unknown"} seconds; confidence {entry.Confidence}%\n");
+            if (entry.ComponentDeployment is not null) sb.AppendLine($"Recipe: {entry.ComponentDeployment.Recipe}; {entry.ComponentDeployment.Files.Count} required attachments\n");
+        }
         if (row.History.Count == 0) sb.AppendLine("No detailed history was retained by the version that created this entry.");
         CatalogDetailsText.Text = sb.ToString();
     }
@@ -111,6 +126,14 @@ public partial class MainWindow
             if (!File.Exists(target)) await Task.Run(() => File.Copy(path, target, false));
             if (!row.Sha256.Equals(await Task.Run(() => RegressionHistoryService.HashFile(target)), StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("The queued file differs from the catalog identity.");
+            if (row.DeploymentMechanism == VirtualBoxReducedProfile.Mechanism)
+                await Task.Run(() => VirtualBoxReducedProfile.Stage(path, target));
+            if (row.MsixDependencies.Count > 0)
+            {
+                await Task.Run(() => MsixDependencyService.CopyValidated(path, target, row.MsixDependencies));
+                if (!await Task.Run(() => MsixDependencyService.Matches(target, row.MsixDependencies)))
+                    throw new InvalidOperationException("The queued MSIX dependencies differ from the catalog evidence.");
+            }
             if (_testModeRunning || _analysisBusy || _issTimer.IsEnabled || _sandboxStarting || _sandboxStopping) return;
             EnableTestModeToggle.IsChecked = true;
             if (!await RefreshTestQueue()) return;

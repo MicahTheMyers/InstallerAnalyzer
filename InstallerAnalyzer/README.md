@@ -1,6 +1,20 @@
-# Installer Analyzer for ImmyBot v0.12.10
+# Installer Analyzer v0.13.27
 
-Windows installer analysis and unattended deployment validation for ImmyBot.
+See the [v0.13.27 release notes](docs/releases/v0.13.27.md) for current changes and validation.
+
+Windows installer analysis and unattended deployment validation for ImmyBot and Datto RMM.
+
+Preview.6 preserves CONNECTION Client installation logs and distinguishes a prerequisite handoff timeout from a main-MSI timeout. This adds diagnostics for the latest user run; the precise vendor handoff issue remains unconfirmed. See [release notes](docs/releases/v0.13.0-preview.6.md).
+
+Preview.5 gives the tracked main gINT MSI an independent bounded wait after prerequisites and retains its setup log before teardown. A direct startup test created its welcome dialog after roughly two minutes of Windows Installer verification. Full gINT lifecycle remains pending. See [release notes](docs/releases/v0.13.0-preview.5.md).
+
+Preview.4 prevents Bentley prerequisites from replacing the expected primary product and reports failed/incomplete lifecycle validation explicitly. See [release notes](docs/releases/v0.13.0-preview.4.md).
+
+Preview.3 recognizes the tested gINT installer as a Bentley bootstrapper using structured CAB evidence. Silent arguments and full gINT lifecycle remain unvalidated. See [release notes](docs/releases/v0.13.0-preview.3.md).
+
+For gINT and other native installers with an undetected .NET 3.5 prerequisite, enable **Settings → Windows Sandbox → Prepare .NET Framework 3.5 before Sandbox installers** and start a fresh Sandbox. The feature is installed and its runtime verified before installer launch; the host is unchanged.
+
+This local preview adds Datto RMM component-kit export and completed InstallShield reference recording/replay. Datto tenant acceptance is pending; public latest remains v0.12.10. See [office test instructions](docs/DATTO-RMM-OFFICE-TEST.md).
 
 ## v0.12.10 assistant, Sandbox controls and performance
 

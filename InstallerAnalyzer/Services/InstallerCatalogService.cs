@@ -76,44 +76,65 @@ public static partial class InstallerCatalogService
         {
             using var db = Open();
             using var cmd = db.CreateCommand();
-            cmd.CommandText = "SELECT Arguments,Family,Product,Version,Publisher,Architecture FROM ValidatedInstallers WHERE Sha256=$hash";
-            cmd.Parameters.AddWithValue("$hash", snapshotHash ?? Hash(result.FilePath));
+            cmd.CommandText = "SELECT Arguments,Family,Product,Version,Publisher,Architecture,DeploymentMechanism,(SELECT RecordJson FROM CatalogMetadata m WHERE m.Sha256=ValidatedInstallers.Sha256) FROM ValidatedInstallers WHERE Sha256=$hash";
+            var hash = snapshotHash ?? Hash(result.FilePath);
+            cmd.Parameters.AddWithValue("$hash", hash);
             using var row = cmd.ExecuteReader();
             if (!row.Read() || !Enum.TryParse<InstallerKind>(row.GetString(1), out var family) || !Enum.IsDefined(family)) return false;
-            result.SuggestedArguments = row.GetString(0);
+            var metadata = row.IsDBNull(7) ? null : System.Text.Json.JsonSerializer.Deserialize<CatalogRecord>(row.GetString(7));
+            if (family == InstallerKind.Msix && !MsixDependencyService.Matches(result.FilePath, metadata?.MsixDependencies ?? []))
+                return false;
+            var components = metadata?.ComponentDeployment is not null || (!row.IsDBNull(6) && row.GetString(6) == "Component recipe");
+            if (components && (family != InstallerKind.Bootstrapper || row.GetString(0) != "" || metadata is null || !ValidComponentRecord(metadata) || !hash.Equals(metadata.Sha256, StringComparison.OrdinalIgnoreCase))) return false;
+            var recorded = metadata?.Recording is not null || (!row.IsDBNull(6) && row.GetString(6) == RecordingMechanism);
+            if (recorded && (family != InstallerKind.InstallShield || row.GetString(0) != "" || metadata is null || !ValidRecordingRecord(metadata) || !hash.Equals(metadata.Sha256, StringComparison.OrdinalIgnoreCase))) return false;
+            // Component MSI arguments must never be replayed against the outer EXE.
+            result.SuggestedArguments = components ? "" : row.GetString(0);
             result.Kind = family;
-            result.NeedsIss = false;
+            result.NeedsIss = recorded;
             if (!string.IsNullOrWhiteSpace(row.GetString(2))) result.ProductName = row.GetString(2);
             if (!string.IsNullOrWhiteSpace(row.GetString(3))) result.FileVersion = row.GetString(3);
             if (!string.IsNullOrWhiteSpace(row.GetString(4))) result.CompanyName = row.GetString(4);
             if (!string.IsNullOrWhiteSpace(row.GetString(5))) result.Architecture = row.GetString(5);
-            result.Evidence.Add("Local catalog: exact SHA-256 previously passed silent install, uninstall and removal. Fresh Sandbox validation still required.");
-            result.CatalogMatch = "Exact validated installer";
+            result.Evidence.Add(components ? "Local catalog: exact SHA-256 has a validated component recipe with six required attachments. Rebuild the recipe from the original source and run fresh Sandbox validation; no child-MSI arguments apply to this EXE." : "Local catalog: exact SHA-256 previously passed silent install, uninstall and removal. Fresh Sandbox validation still required.");
+            if (recorded) result.Evidence.Add("Catalog retains both InstallShield response files. Fresh Sandbox recording and validation are required; session-specific paths are not reused.");
+            result.CatalogMatch = recorded ? "Exact validated InstallShield recording" : components ? "Exact validated component recipe" : "Exact validated installer";
             return true;
         }
         catch (Exception ex) { result.Evidence.Add("Local catalog unavailable: " + ex.Message); return false; }
     }
-    public static bool Remember(AnalysisResult installer, InstallAnalysis? proof, string source = "Analyze")
+    public static bool Remember(AnalysisResult installer, InstallAnalysis? proof, string source = "Analyze", string? responseFolder = null)
     {
         if (proof is not null && Recorded.TryGetValue(proof, out _)) return false;
-        if (!LifecycleValidationService.IsComplete(proof) || installer.NeedsIss) return false;
+        if (!LifecycleValidationService.IsComplete(proof)) return false;
         // IsComplete guarantees non-null, identity and clean lifecycle evidence.
         if (proof is null) return false;
-        // Extracted payloads and response files need their own packaged-source model. Never replay
-        // a child command against the original bootstrapper merely because that lifecycle passed.
+        var recordingRequested = installer.NeedsIss || proof.SelectedSilentStrategy == "Recorded InstallShield response file";
+        var recording = recordingRequested ? CaptureRecording(proof, responseFolder) : null;
+        if (recordingRequested && (installer.Kind != InstallerKind.InstallShield || recording is null)) return false;
+        var components = proof.ComponentDeployment is not null || proof.DeploymentMechanism == "Component recipe";
         var selected = proof.SilentStrategyCandidates.FirstOrDefault(c => c.Name == proof.SelectedSilentStrategy);
         var file = selected?.File ?? proof.DeploymentSource;
-        if (string.IsNullOrWhiteSpace(file) ||
-            !(file.Equals(Path.Combine("C:\\InstallerInput", installer.FileName), StringComparison.OrdinalIgnoreCase) ||
-              file.Equals(installer.FilePath, StringComparison.OrdinalIgnoreCase))) return false;
-        var arguments = selected?.Arguments ?? proof.CombinedSilentArguments;
-        if ((string.IsNullOrWhiteSpace(arguments) && installer.Kind != InstallerKind.Msix) ||
-            (arguments?.Contains("C:\\Installer", StringComparison.OrdinalIgnoreCase) ?? false)) return false;
-        arguments ??= "";
         var primary = proof.NewUninstallEntries.FirstOrDefault(e => e.Key == proof.PrimaryKey);
         if (primary is null) return false;
+        if (components && (proof.ValidationSchemaVersion < 3 || !proof.EvidenceCollectionComplete ||
+            !GintDeploymentPlanService.IsCanonical(proof.ComponentDeployment) || proof.DeploymentMechanism != "Component recipe" ||
+            !string.Equals(Path.GetFileName(file), "gINT.msi", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(primary.ProductCode, GintDeploymentPlanService.ProductCode, StringComparison.OrdinalIgnoreCase))) return false;
+        // Other extracted payloads remain unsupported. A component record stores structured
+        // recipe data and deliberately has no original-EXE command-line arguments.
+        if (!components && (string.IsNullOrWhiteSpace(file) ||
+            !(file.Equals(Path.Combine("C:\\InstallerInput", installer.FileName), StringComparison.OrdinalIgnoreCase) ||
+              file.Equals(installer.FilePath, StringComparison.OrdinalIgnoreCase)))) return false;
+        var arguments = components || recording is not null ? "" : selected?.Arguments ?? proof.CombinedSilentArguments;
+        if (!components && recording is null && ((string.IsNullOrWhiteSpace(arguments) && installer.Kind != InstallerKind.Msix) ||
+            (arguments?.Contains("C:\\Installer", StringComparison.OrdinalIgnoreCase) ?? false))) return false;
+        arguments ??= "";
         var packageHash = Hash(installer.FilePath);
         if (!string.IsNullOrWhiteSpace(proof.InstallerSha256) && !packageHash.Equals(proof.InstallerSha256, StringComparison.OrdinalIgnoreCase)) return false;
+        if (recording is not null && !packageHash.Equals(proof.InstallerSha256, StringComparison.OrdinalIgnoreCase)) return false;
+        if (components && (!packageHash.Equals(GintDeploymentPlanService.SourceHash, StringComparison.OrdinalIgnoreCase) ||
+            !packageHash.Equals(proof.InstallerSha256, StringComparison.OrdinalIgnoreCase))) return false;
         var proofId = proof.SessionId ?? proof.WorkflowStageHistory.FirstOrDefault()?.At ?? proof.CapturedAt;
         using var db = Open();
         using var transaction = db.BeginTransaction();
@@ -137,13 +158,13 @@ public static partial class InstallerCatalogService
             """;
         foreach (var pair in new Dictionary<string,string?> {
             ["$hash"]=packageHash, ["$product"]=primary.DisplayName, ["$version"]=primary.DisplayVersion,
-            ["$publisher"]=primary.Publisher, ["$arch"]=installer.Architecture, ["$family"]=installer.Kind.ToString(),
+            ["$publisher"]=primary.Publisher, ["$arch"]=installer.Architecture, ["$family"]=components ? InstallerKind.Bootstrapper.ToString() : installer.Kind.ToString(),
             ["$args"]=arguments, ["$code"]=primary.ProductCode, ["$key"]=primary.Key,
-            ["$uninstall"]=proof.UninstallCandidate, ["$mechanism"]=proof.DeploymentMechanism,
+            ["$uninstall"]=proof.UninstallCandidate, ["$mechanism"]=recording is not null ? RecordingMechanism : proof.DeploymentMechanism,
             ["$identity"]=proof.IdentitySource, ["$at"]=DateTime.UtcNow.ToString("O"), ["$proof"]=proofId })
             cmd.Parameters.AddWithValue(pair.Key, pair.Value ?? "");
         var written = cmd.ExecuteNonQuery();
-        if (written > 0) RememberDetails(db, transaction, installer, proof, packageHash, arguments, source, proofId ?? proof.CapturedAt!);
+        if (written > 0) RememberDetails(db, transaction, installer, proof, packageHash, arguments, source, proofId ?? proof.CapturedAt!, recording);
         transaction.Commit();
         Recorded.GetValue(proof, _ => new object());
         return written > 0;

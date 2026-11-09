@@ -9,8 +9,9 @@ namespace InstallerAnalyzer.Services;
 
 public static class NetFx3RequirementService
 {
-    public static string Detect(string path, MsiMetadata metadata)
+    public static string Detect(string path, MsiMetadata metadata, bool prepareRequested = false)
     {
+        if (prepareRequested) return "User-requested Sandbox prerequisite: install and verify .NET Framework 3.5 before launching the installer.";
         foreach (var condition in metadata.LaunchConditions)
             if (IsExplicitRequirement(condition.Description)) return "MSI LaunchCondition: " + condition.Description;
         try

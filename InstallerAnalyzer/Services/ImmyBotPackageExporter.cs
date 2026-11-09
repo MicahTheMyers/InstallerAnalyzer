@@ -1,17 +1,21 @@
 using System.IO;
 using System.IO.Compression;
+using InstallerAnalyzer.Models;
 
 namespace InstallerAnalyzer.Services;
 
 public static class ImmyBotPackageExporter
 {
-    public static void Export(string zipPath, string installerPath, string? outputFolder, string? logoPath)
+    public static void Export(string zipPath, string installerPath, string? outputFolder, string? logoPath, IReadOnlyList<MsixDependency>? dependencies = null)
     {
         var temp = Path.Combine(Path.GetTempPath(), "InstallerAnalyzer-ImmyBot-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(temp);
         try
         {
-            File.Copy(installerPath, Path.Combine(temp, Path.GetFileName(installerPath)), true);
+            var targetInstaller = Path.Combine(temp, Path.GetFileName(installerPath));
+            File.Copy(installerPath, targetInstaller, true);
+            if (dependencies is { Count: > 0 })
+                MsixDependencyService.CopyValidated(installerPath, targetInstaller, dependencies);
             if (!string.IsNullOrWhiteSpace(outputFolder))
             {
                 foreach (var name in new[] { "setup.iss", "uninstall.iss" })

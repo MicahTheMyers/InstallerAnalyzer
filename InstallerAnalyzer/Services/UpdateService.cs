@@ -42,12 +42,14 @@ public sealed class UpdateService
         _startInstaller = startInstaller; _stagingRoot = stagingRoot; _maximumBytes = maximumBytes;
         _installerMetadata = installerMetadata ?? ReadInstallerMetadata;
         if (maximumBytes <= 0) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("InstallerAnalyzer/0.12.10");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("InstallerAnalyzer/" + CurrentDisplayVersion);
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         _http.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
         _http.Timeout = TimeSpan.FromSeconds(20);
         _http.MaxResponseContentBufferSize = 1024 * 1024; // Release metadata only; downloads stream under their own limit.
     }
+
+    public static string CurrentDisplayVersion => (Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? CurrentVersion.ToString()).Split('+')[0];
 
     public static Version CurrentVersion => Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0);
     public static bool IsNewer(UpdateInfo update) => update.Version > CurrentVersion;

@@ -21,11 +21,15 @@ Check ($probe.Calls -eq 2) 'Install response script accepts a reboot-required re
 $probe.ExitCode=1603;$failed=$false;try{& $install}catch{$failed=$_.Exception.Message.Contains('1603')}
 Check $failed 'Install response script reports unsuccessful installer exit codes'
 $probe.ExitCode=0;& $uninstall
-Check ($probe.File -eq 'cmd.exe' -and ($probe.Arguments -join ' ').Contains('/f1"'+$removal+'"')) 'Validated uninstall script finds staged literal response file and quotes its path'
+Check ($probe.File -eq 'C:\Program Files\Fixture\uninstall.exe' -and ($probe.Arguments -join ' ').Contains('/f1"'+$removal+'"')) 'Validated uninstall launches the executable directly and quotes the staged response path'
 Move-Item -LiteralPath $removal -Destination ($removal+'.held')
 try {$before=$probe.Calls;$failed=$false;try{& $uninstall}catch{$failed=$_.Exception.Message.Contains('Unable to locate uninstall.iss')};Check ($failed -and $probe.Calls -eq $before) 'Missing uninstall response file fails before process launch'}finally{Move-Item -LiteralPath ($removal+'.held') -Destination $removal}
 $probe.ExitCode=1605;& $uninstall
-Check ($probe.File -eq 'cmd.exe') 'Validated response uninstall accepts product-already-absent result'
+Check ($probe.File -eq 'C:\Program Files\Fixture\uninstall.exe') 'Validated response uninstall accepts product-already-absent result'
 $probe.ExitCode=1603;$failed=$false;try{& $uninstall}catch{$failed=$_.Exception.Message.Contains('1603')}
 Check $failed 'Validated response uninstall reports unsuccessful exit codes'
+$probe.ExitCode=0
+& (Join-Path $folder 'Wrapped-Install.ps1')
+Check ($probe.File -eq $InstallerFile -and $probe.Arguments.StartsWith('/s /a /s ') -and $probe.Arguments.Contains('/f1"'+$setup+'"')) 'Exported response replay preserves wrapper switches and binds the staged response file'
+Check (-not $probe.Arguments.Contains('C:\InstallerOutput') -and $probe.Arguments.Contains("/tag=O'Brien{fixture}")) 'Export drops obsolete Sandbox response/log paths while preserving literal argument data'
 Write-Output ('RESULT: '+$count+' passed, 0 failed; process launch mocked throughout')

@@ -1,8 +1,20 @@
 namespace InstallerAnalyzer.Models;
 public sealed class InstallAnalysis
 {
+    public ComponentDeploymentPlan? ComponentDeployment { get; set; }
+    public List<MsixDependency> MsixDependencies { get; set; } = new();
+    public bool VirtualBoxDriverCleanupVerified { get; set; }
+    public string ExpectedPrimaryProduct { get; set; } = "";
+    public BootstrapperMainMsiEvidence? BootstrapperMainMsi { get; set; }
+    public List<BootstrapperLogSnapshot> BootstrapperMsiLogSnapshots { get; set; } = new();
+    public List<BootstrapperLogSnapshot> BootstrapperPrerequisiteLogSnapshots { get; set; } = new();
+    public List<string> BootstrapperActiveProcesses { get; set; } = new();
+    public string BootstrapperPrerequisiteLogStatus { get; set; } = "";
+    public SandboxCompatibilityEvidence SandboxCompatibility { get; set; } = new();
     public NetFx3Provisioning NetFx3Provisioning { get; set; } = new();
     public AppControlEvidence AppControl { get; set; } = new();
+    public AppControlEvidence BootstrapperChildAppControl { get; set; } = new();
+    public List<string> BootstrapperObservedImages { get; set; } = new();
     public bool PayloadScanIncomplete { get; set; }
     public PayloadTraceCapture PayloadTrace { get; set; } = new();
     public List<DetectionStrategy> DetectionStrategies { get; set; } = new();
@@ -96,6 +108,8 @@ public sealed class UninstallEntry
     public object? WindowsInstaller { get; set; }
     public string? ProductCode { get; set; }
 }
+
+public sealed record MsixDependency(string FileName, string Sha256);
 
 public sealed class SilentStrategyCandidate
 {
