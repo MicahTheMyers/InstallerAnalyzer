@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -19,6 +20,7 @@ public sealed class UpdateService
     public const string Owner = "MicahTheMyers";
     public const string Repository = "InstallerAnalyzer";
     public const string InstallerAssetName = "InstallerAnalyzer-Setup.exe";
+    public const string ManifestAssetName = "InstallerAnalyzer-Update.json";
     internal const string InstallerProductName = "Installer Analyzer for ImmyBot";
     private const string LatestReleaseApi = "https://api.github.com/repos/MicahTheMyers/InstallerAnalyzer/releases/latest";
     private readonly HttpClient _http;
@@ -32,15 +34,25 @@ public sealed class UpdateService
     public UpdateService() : this(new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }),
         RunningPublisher, InstallerIdentityService.Inspect,
         info => { using var process = Process.Start(info) ?? throw new InvalidOperationException("Windows did not start the update installer."); },
-        Path.Combine(Path.GetTempPath(), "InstallerAnalyzer", "Updates")) { }
+        Path.Combine(Path.GetTempPath(), "InstallerAnalyzer", "Updates"), releaseKey: ReadReleaseKey()) { }
+
+    private readonly string? _releaseKey;
+    private static string ReadReleaseKey()
+    {
+        using var stream = typeof(UpdateService).Assembly.GetManifestResourceStream("InstallerAnalyzer.release-update-public.pem")
+            ?? throw new InvalidOperationException("Missing release verification key.");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
 
     internal UpdateService(HttpClient http, Func<string> trustedPublisher, Func<string, InstallerIdentity> inspectSignature,
         Action<ProcessStartInfo> startInstaller, string stagingRoot, long maximumBytes = 512L * 1024 * 1024,
-        Func<string, (Version? Version, string Product)>? installerMetadata = null)
+        Func<string, (Version? Version, string Product)>? installerMetadata = null, string? releaseKey = null)
     {
         _http = http; _trustedPublisher = trustedPublisher; _inspectSignature = inspectSignature;
         _startInstaller = startInstaller; _stagingRoot = stagingRoot; _maximumBytes = maximumBytes;
         _installerMetadata = installerMetadata ?? ReadInstallerMetadata;
+        _releaseKey = releaseKey;
         if (maximumBytes <= 0) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("InstallerAnalyzer/" + CurrentDisplayVersion);
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
@@ -78,8 +90,22 @@ public sealed class UpdateService
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(10));
         var token = timeout.Token;
-        var publisher = await Task.Run(_trustedPublisher, token);
-        if (string.IsNullOrWhiteSpace(publisher)) throw new InvalidDataException("The running application's trusted signing certificate could not be established.");
+        string? publisher = null;
+        if (_releaseKey is null)
+        {
+            publisher = await Task.Run(_trustedPublisher, token);
+            if (string.IsNullOrWhiteSpace(publisher)) throw new InvalidDataException("The running application's trusted signing certificate could not be established.");
+        }
+        else
+        {
+            var manifestUrl = new Uri($"https://github.com/{Owner}/{Repository}/releases/download/{update.Tag}/{ManifestAssetName}");
+            using var manifestResponse = await GetDownloadResponseAsync(manifestUrl, token);
+            manifestResponse.EnsureSuccessStatusCode();
+            await manifestResponse.Content.LoadIntoBufferAsync(4096).WaitAsync(token);
+            var manifest = await manifestResponse.Content.ReadFromJsonAsync<ReleaseManifest>(cancellationToken: token)
+                ?? throw new InvalidDataException("The signed update manifest is missing.");
+            VerifyReleaseManifest(manifest, update.Tag, expectedHash, _releaseKey);
+        }
 
         // Release tags are never used in local paths, and concurrent downloads never share files.
         var folder = Path.Combine(_stagingRoot, Guid.NewGuid().ToString("N"));
@@ -135,15 +161,34 @@ public sealed class UpdateService
         }, cancellationToken);
     }
 
-    private void VerifyFile(FileStream stream, string path, string expectedHash, string publisher, Version version)
+    internal static void VerifyReleaseManifest(ReleaseManifest manifest, string tag, string hash, string publicKey)
+    {
+        if (manifest is not { Schema: 1 } || manifest.Tag != tag || manifest.Asset != InstallerAssetName ||
+            !string.Equals(manifest.Sha256, hash, StringComparison.OrdinalIgnoreCase) ||
+            manifest.Signature is not { Length: 88 })
+            throw new InvalidDataException("The release manifest does not match this update.");
+        using var key = ECDsa.Create();
+        key.ImportFromPem(publicKey);
+        var message = System.Text.Encoding.UTF8.GetBytes(
+            $"InstallerAnalyzer update v1\n{tag}\n{InstallerAssetName}\n{hash.ToUpperInvariant()}\n");
+        if (!key.VerifyData(message, Convert.FromBase64String(manifest.Signature), HashAlgorithmName.SHA256))
+            throw new InvalidDataException("The release manifest signature is invalid.");
+    }
+
+    internal sealed record ReleaseManifest(int Schema, string Tag, string Asset, string Sha256, string Signature);
+
+    private void VerifyFile(FileStream stream, string path, string expectedHash, string? publisher, Version version)
     {
         if (!stream.CanRead) throw new InvalidOperationException("The verified update has been closed. Download it again.");
         stream.Position = 0;
         var actual = Convert.ToHexString(SHA256.HashData(stream));
         if (!actual.Equals(expectedHash, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The update failed SHA-256 verification. It will not be installed.");
-        var signature = _inspectSignature(path);
-        if (!signature.SignatureValid || !publisher.Equals(signature.SignerThumbprint, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("The update's signature is invalid or does not match this application's signing certificate. It will not be installed.");
+        if (publisher is not null)
+        {
+            var signature = _inspectSignature(path);
+            if (!signature.SignatureValid || !publisher.Equals(signature.SignerThumbprint, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The update's signature is invalid or does not match this application's signing certificate. It will not be installed.");
+        }
         var metadata = _installerMetadata(path);
         if (metadata.Version is null || NormalizeVersion(metadata.Version) != NormalizeVersion(version) || metadata.Product != InstallerProductName)
             throw new InvalidDataException("The signed installer does not match the expected application and release version. It will not be installed.");
@@ -229,10 +274,10 @@ public sealed class UpdateService
         internal string Folder { get; }
         public string Path { get; }
         internal string Hash { get; }
-        internal string Publisher { get; }
+        internal string? Publisher { get; }
         internal Version Version { get; }
         internal FileStream LockedFile { get; }
-        internal VerifiedUpdate(UpdateService owner, string folder, string path, string hash, string publisher, Version version, FileStream locked)
+        internal VerifiedUpdate(UpdateService owner, string folder, string path, string hash, string? publisher, Version version, FileStream locked)
         { Owner = owner; Folder = folder; Path = path; Hash = hash; Publisher = publisher; Version = version; LockedFile = locked; }
         public void Dispose()
         {

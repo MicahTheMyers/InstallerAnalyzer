@@ -1,4 +1,4 @@
-# Installer Analyzer v0.14.4
+# Installer Analyzer v0.14.5
 
 Windows installer analysis and unattended deployment validation for ImmyBot and Datto RMM.
 

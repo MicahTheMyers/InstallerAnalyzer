@@ -82,6 +82,37 @@ jobs:
           & $iscc 'Installer\InstallerAnalyzer.iss'
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
 
+      - name: Sign update manifest
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          IA_RELEASE_SIGNING_KEY: ${{ secrets.IA_RELEASE_SIGNING_KEY }}
+        run: |
+          $asset = 'InstallerAnalyzer-Setup.exe'
+          $tag = $env:GITHUB_REF_NAME
+          $hash = (Get-FileHash -LiteralPath "Release/$asset" -Algorithm SHA256).Hash
+          $message = [Text.Encoding]::UTF8.GetBytes("InstallerAnalyzer update v1`n$tag`n$asset`n$hash`n")
+          $key = [Security.Cryptography.ECDsa]::Create()
+          $verifier = [Security.Cryptography.ECDsa]::Create()
+          try {
+            $key.ImportFromPem($env:IA_RELEASE_SIGNING_KEY)
+            $verifier.ImportFromPem((Get-Content -LiteralPath 'Assets/release-update-public.pem' -Raw))
+            $signature = $key.SignData($message, [Security.Cryptography.HashAlgorithmName]::SHA256)
+            if (!$verifier.VerifyData($message, $signature, [Security.Cryptography.HashAlgorithmName]::SHA256)) {
+              throw 'Release signing key does not match the public key embedded in the app.'
+            }
+            @{
+              schema = 1
+              tag = $tag
+              asset = $asset
+              sha256 = $hash
+              signature = [Convert]::ToBase64String($signature)
+            } | ConvertTo-Json | Set-Content -LiteralPath 'Release/InstallerAnalyzer-Update.json' -Encoding utf8NoBOM
+          } finally {
+            $key.Dispose()
+            $verifier.Dispose()
+          }
+
       - name: Attest Windows release files
         uses: actions/attest@v4
         with:
@@ -107,3 +138,4 @@ jobs:
           files: |
             InstallerAnalyzer/Release/InstallerAnalyzer-Setup.exe
             InstallerAnalyzer/Release/InstallerAnalyzer-Portable.exe
+            InstallerAnalyzer/Release/InstallerAnalyzer-Update.json

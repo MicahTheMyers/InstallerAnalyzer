@@ -21,6 +21,32 @@ internal static class UpdateSecurityChecks
     {
         var folder = Path.Combine(root, "update-security"); Directory.CreateDirectory(folder);
         var fixtureId = 0;
+        using var releaseSigner = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var hash = Digest[7..];
+        var message = Encoding.UTF8.GetBytes($"InstallerAnalyzer update v1\nv99.0.0\n{UpdateService.InstallerAssetName}\n{hash}\n");
+        var signatureBytes = releaseSigner.SignData(message, HashAlgorithmName.SHA256);
+        var manifest = new UpdateService.ReleaseManifest(1, "v99.0.0", UpdateService.InstallerAssetName, hash, Convert.ToBase64String(signatureBytes));
+        using (var fixture = ManifestFixture(manifest, Payload))
+        {
+            using var verified = await fixture.Service.DownloadInstallerAsync(Update());
+            await fixture.Service.LaunchInstallerAsync(verified);
+            check(fixture.Launches.Count == 1 && fixture.SignatureCalls == 0, "A valid signed release manifest authorizes matching installer bytes");
+        }
+        signatureBytes[0] ^= 1;
+        using (var fixture = ManifestFixture(manifest with { Signature = Convert.ToBase64String(signatureBytes) }, Payload))
+        {
+            await Reject(fixture, Update(), "A tampered manifest cannot authorize an installer");
+            check(fixture.Requests == 1, "Manifest verification precedes the installer download");
+        }
+        using (var fixture = ManifestFixture(manifest, Encoding.UTF8.GetBytes("modified installer")))
+            await Reject(fixture, Update(), "A signed manifest rejects changed installer bytes");
+
+        Fixture ManifestFixture(UpdateService.ReleaseManifest value, byte[] bytes) =>
+            new(Path.Combine(folder, (++fixtureId).ToString()), (_, request) => new(HttpStatusCode.OK)
+            {
+                Content = request == 1 ? System.Net.Http.Json.JsonContent.Create(value) : new ByteArrayContent(bytes)
+            }, null, null, 1024, releaseSigner.ExportSubjectPublicKeyInfoPem());
+
         Fixture Create(Func<HttpRequestMessage, int, HttpResponseMessage>? response = null, Func<string, InstallerIdentity>? signature = null,
             Func<string>? publisher = null, long maximum = 1024) => new(Path.Combine(folder, (++fixtureId).ToString()), response, signature, publisher, maximum);
         async Task Reject(Fixture fixture, UpdateInfo update, string message, bool beforeNetwork = false)
@@ -166,11 +192,11 @@ internal static class UpdateSecurityChecks
         private readonly HttpClient client;
         public UpdateService Service { get; }
         public Fixture(string root, Func<HttpRequestMessage, int, HttpResponseMessage>? response, Func<string, InstallerIdentity>? signature,
-            Func<string>? publisher, long maximum)
+            Func<string>? publisher, long maximum, string? releaseKey = null)
         {
             Root = root; Signature = signature ?? (_ => new() { SignatureStatus = "Valid", SignerThumbprint = "FIXTURE-PUBLISHER" });
             client = new HttpClient(new Handler(request => (response ?? ((_, _) => Body()))(request, ++Requests)));
-            Service = new UpdateService(client, publisher ?? (() => "FIXTURE-PUBLISHER"), path => { SignatureCalls++; return Signature(path); }, Launches.Add, root, maximum, path => Metadata(path));
+            Service = new UpdateService(client, publisher ?? (() => "FIXTURE-PUBLISHER"), path => { SignatureCalls++; return Signature(path); }, Launches.Add, root, maximum, path => Metadata(path), releaseKey);
         }
         public void Dispose() => client.Dispose();
     }
