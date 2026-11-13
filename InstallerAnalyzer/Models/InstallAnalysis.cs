@@ -1,6 +1,7 @@
 namespace InstallerAnalyzer.Models;
 public sealed class InstallAnalysis
 {
+    public string? AnalyzerVersion { get; set; }
     public ComponentDeploymentPlan? ComponentDeployment { get; set; }
     public List<MsixDependency> MsixDependencies { get; set; } = new();
     public bool VirtualBoxDriverCleanupVerified { get; set; }
@@ -44,6 +45,8 @@ public sealed class InstallAnalysis
     public List<MsiRemovalUiAction> MsiRemovalUiActions { get; set; } = new();
     public string? SessionId { get; set; }
     public string? InstallerSha256 { get; set; }
+    public string? InstallerArchiveSha256 { get; set; }
+    public string? InstallerArchiveEntry { get; set; }
     public string? Installer { get; set; }
     public int InstallerExitCode { get; set; }
     public string? CapturedAt { get; set; }

@@ -17,6 +17,7 @@ function Get-CimInstance {param($ClassName) [pscustomobject]@{Model=$(if($script
 function Test-Path {param($LiteralPath) if($LiteralPath -eq 'C:\InstallerInput\NetFx3RepairSource\source-manifest.json'){return $script:RepairManifest};if($LiteralPath -eq 'C:\InstallerInput\NetFx3Source'){return $script:Offline};return $true}
 function Get-ItemProperty {param($LiteralPath) [pscustomobject]@{CurrentBuild=$script:Build;WUServer=$script:Server;UseWUServer=$script:UseServer}}
 function Set-ItemProperty {param($LiteralPath,$Name,$Value,$ErrorAction) $script:PolicyWrites++; if($Name -ne 'UseWUServer' -or $Value -ne 0){throw 'Unexpected policy mutation'}}
+function Get-Service {param($Name,$ErrorAction) [pscustomobject]@{StartType='Manual'}}
 function Restart-Service {param($Name,[switch]$Force,$ErrorAction) if($Name -ne 'wuauserv'){throw 'Unexpected service restart'};$script:Restarts++}
 function Write-Checkpoint {param($stage)}
 function Get-NetFx3FeatureState {$script:Queries++;if($script:Queries -eq 1){return $script:Before};return $script:After}
@@ -60,4 +61,11 @@ try{Prepare-NetFx3Sandbox;throw 'Expected manifest rejection'}catch{Check ($_.Ex
 function Get-Content {param($LiteralPath,[switch]$Raw) return '{"Schema":1,"Entries":[{"Component":"..\\Windows\\System32","Files":[]}],"Bytes":0}'}
 Reset;$script:UseServer=1;$script:Server='127.0.0.1:80';$script:RepairManifest=$true
 try{Prepare-NetFx3Sandbox;throw 'Expected component rejection'}catch{Check ($_.Exception.Message -like '*Invalid NetFx3 component identity*' -and $script:PolicyWrites -eq 0) 'Component traversal rejected before source reads or policy changes'}
+function Add-NetFx3SandboxPackage {param($source) $script:StagingCalls++;return $script:StagingResult}
+Reset;$script:StagingCalls=0;$script:StagingResult=[pscustomobject]@{ExitCode=0};$script:Offline=$true;$script:UseServer=1;$script:Server='127.0.0.1:80';$script:Exit=-2145107924
+Ensure-NetFx3 'This application requires .NET Framework 3.5'
+Check ($script:StagingCalls -eq 1 -and $result.NetFx3Provisioning.RuntimeVerified) 'Offline staging fallback still requires the feature and runtime checks'
+Reset;$script:StagingCalls=0;$script:StagingResult=$null;$script:Offline=$true;$script:UseServer=1;$script:Server='127.0.0.1:80';$script:Exit=-2145107924
+FailExpected 'No installer retry'
+Check ($script:StagingCalls -eq 1 -and -not $result.NetFx3Provisioning.RuntimeVerified) 'Unverified CAB leaves the installer blocked'
 "RESULT: $count passed, 0 failed"

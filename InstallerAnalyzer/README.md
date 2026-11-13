@@ -1,8 +1,12 @@
-# Installer Analyzer v0.13.27
-
-See the [v0.13.27 release notes](docs/releases/v0.13.27.md) for current changes and validation.
+# Installer Analyzer v0.14.4
 
 Windows installer analysis and unattended deployment validation for ImmyBot and Datto RMM.
+
+On the Analyze page, select or drop a ZIP containing the vendor's installer folders, then choose its main EXE or MSI. Sandbox preserves the folder layout and starts setup from its own directory. After a complete lifecycle, supported deployment exports include the same ZIP as `installer-source.zip`.
+
+For Project Professional 2007, ImmyBot and Datto RMM can export the built-in silent install and removal commands after Sandbox validates both. The generated scripts check the ZIP hash and recreate the validated XML on the endpoint. Keep `installer-source.zip` available for both actions. If ImmyBot does not stage the attachment for removal, place it beside the uninstall script. When the Sandbox run requested .NET Framework 3.5, install that prerequisite on the endpoint first. Setup can request a restart; the exported scripts report it without restarting the machine.
+
+See the [v0.13.27 release notes](docs/releases/v0.13.27.md) for the previous release.
 
 Preview.6 preserves CONNECTION Client installation logs and distinguishes a prerequisite handoff timeout from a main-MSI timeout. This adds diagnostics for the latest user run; the precise vendor handoff issue remains unconfirmed. See [release notes](docs/releases/v0.13.0-preview.6.md).
 

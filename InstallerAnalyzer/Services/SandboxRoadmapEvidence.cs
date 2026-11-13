@@ -21,7 +21,8 @@ function Record-InstallerUiEvidence($window,$tracked) {
     $known=[datetime]$script:ObservedBirthsByPid[[string]$window.Pid]
     if([Math]::Abs(($process.StartTime-$known).TotalMilliseconds) -gt 1){return}
     $labels=@([InstallerAnalyzerWindowProbe]::ReadStaticLabels([long]$window.Hwnd,[int]$window.Pid) | Where-Object {
-      $_ -match '(?i)\.net|framework|netfx|visual c\+\+|webview|directx|java|\.dll|missing|required|prerequisite|reboot|restart|sign[ -]?in|log[ -]?in|authentication|optional|also install|additional software|bundled' -and
+      ($_ -match '(?i)\.net|framework|netfx|visual c\+\+|webview|directx|java|\.dll|missing|required|prerequisite|reboot|restart|sign[ -]?in|log[ -]?in|authentication|optional|also install|additional software|bundled' -or
+       $_ -match '(?i)^\s*<?\s*&?(?:back|next|finish|cancel|ok|yes|no|retry|install|remove|repair|change)\s*>?\s*$') -and
       $_ -notmatch '(?i)password|passwd|api.?key|secret|token|licen[cs]e\s*(key|number)|serial\s*(number|key)'
     } | Select-Object -First 16)
     if($labels.Count -gt 0){

@@ -12,11 +12,19 @@ public sealed record DattoRmmScripts(string Launcher, string Component, string I
 
 public static class DattoRmmDeploymentService
 {
+    internal static bool RequiresPreinstalledNetFx3(InstallAnalysis? proof) =>
+        proof?.ComponentDeployment is null && !string.IsNullOrWhiteSpace(proof?.NetFx3Provisioning?.Evidence);
+
     public static string? BlockReason(AnalysisResult? source, UninstallEntry? entry, InstallAnalysis? proof, string? responses)
     {
         if (source is null || entry is null || !LifecycleValidationService.IsComplete(proof)) return "Complete the install/removal lifecycle in Sandbox first.";
         if (!string.Equals(entry.Key, proof!.PrimaryKey, StringComparison.OrdinalIgnoreCase)) return "Select the application that passed the recorded lifecycle.";
         if (VirtualBoxReducedProfile.IsProfile(proof)) return "The VirtualBox profile requires its MSI cabinet and Visual C++ attachments. Datto export for this profile needs separate validation.";
+        if (source.Archive is { } archive)
+        {
+            if (archive.DeploymentBlockReason(proof) is { } reason) return reason;
+            if (!File.Exists(archive.Path)) return "The original installer ZIP is no longer available.";
+        }
         var components = proof.ComponentDeployment is not null;
         if (components && (proof.ValidationSchemaVersion < 3 || !proof.EvidenceCollectionComplete)) return "A fresh complete component-recipe lifecycle is required for this export.";
         if (components && (!GintDeploymentPlanService.IsCanonical(proof.ComponentDeployment) ||
@@ -26,7 +34,8 @@ public static class DattoRmmDeploymentService
         if (components && source.NeedsIss) return "The gINT component recipe does not use response-file mode. Restore the analyzed installer type.";
         if (source.IsPerUser || source.Kind == InstallerKind.Msix || IsUserScope(entry.Key) || IsUserScope(entry.InstallLocation))
             return "This export supports machine-wide installations under LocalSystem. Per-user and MSIX deployments need separate context validation.";
-        if (!File.Exists(source.FilePath) || Path.GetExtension(source.FilePath).ToLowerInvariant() is not (".exe" or ".msi")) return "A single original MSI or EXE installer is required.";
+        if ((source.Archive is null && !File.Exists(source.FilePath)) || Path.GetExtension(source.FilePath).ToLowerInvariant() is not (".exe" or ".msi"))
+            return "An original MSI or EXE installer is required.";
         if (source.Kind == InstallerKind.Msi && !source.FilePath.EndsWith(".msi", StringComparison.OrdinalIgnoreCase)) return "An extracted MSI requires separate payload packaging.";
         if (source.FilePath.EndsWith(".msi", StringComparison.OrdinalIgnoreCase) && source.Kind != InstallerKind.Msi) return "Restore the MSI installer type or run fresh validation.";
         if (proof.SelectedSilentStrategy?.StartsWith("Recorded InstallShield",StringComparison.OrdinalIgnoreCase)==true && !source.NeedsIss) return "Restore recorded response-file mode or run fresh validation.";
@@ -34,8 +43,7 @@ public static class DattoRmmDeploymentService
         if (!components && !string.IsNullOrWhiteSpace(proof.DeploymentSource) && !string.Equals(Path.GetFileName(proof.DeploymentSource), source.FileName, StringComparison.OrdinalIgnoreCase))
             return "This strategy uses a separate deployment payload; original-file export is not supported for it yet.";
         if (string.IsNullOrWhiteSpace(proof.CombinedSilentArguments ?? proof.BaseSilentArguments)) return "A validated silent installation command is required.";
-        if (!components && !string.IsNullOrWhiteSpace(proof.NetFx3Provisioning.Evidence)) return "This installer requires .NET 3.5 prerequisite planning for the target devices before Datto export.";
-        if (Regex.IsMatch(proof.CombinedSilentArguments ?? proof.BaseSilentArguments ?? "", @"(?i)(?:^|\s)TRANSFORMS\s*="))
+        if (source.Archive is null && Regex.IsMatch(proof.CombinedSilentArguments ?? proof.BaseSilentArguments ?? "", @"(?i)(?:^|\s)TRANSFORMS\s*="))
             return "MSI transforms require a multi-file deployment package, which is not supported by this export yet.";
         var arguments = (proof.CombinedSilentArguments ?? proof.BaseSilentArguments ?? "") + " " + proof.UninstallCandidate;
         if (Regex.IsMatch(arguments, @"(?i)(?:^|\s|[/\-])(?:password|passwd|pwd|token|apikey|api_key|secret|clientsecret|licensekey)\s*(?:=|:|\s)"))
@@ -59,8 +67,9 @@ public static class DattoRmmDeploymentService
         var file = new FileInfo(Path.Combine(root, name));
         if (!file.Exists || file.Length is <= 0 or > 1048576) return false;
         var text = File.ReadAllText(file.FullName);
-        return text.Contains("[InstallShield Silent]", StringComparison.OrdinalIgnoreCase) &&
-            text.Contains("File=Response File", StringComparison.OrdinalIgnoreCase) && Regex.IsMatch(text, @"(?im)^Count\s*=\s*[1-9]\d*\s*$");
+        return (text.Contains("[InstallShield Silent]", StringComparison.OrdinalIgnoreCase) &&
+            text.Contains("File=Response File", StringComparison.OrdinalIgnoreCase) && Regex.IsMatch(text, @"(?im)^Count\s*=\s*[1-9]\d*\s*$")) ||
+            InstallShieldResponseFormat.HasHeaderlessDialogSequence(text);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
     }
@@ -68,7 +77,9 @@ public static class DattoRmmDeploymentService
     private static Dictionary<string, string> Sources(AnalysisResult source, InstallAnalysis proof, string? responses)
     {
         if (proof.ComponentDeployment is not null) return GintDeploymentPlanService.ExportSources(source.FilePath, proof.ComponentDeployment);
-        var files = new Dictionary<string, string> { ["installer" + Path.GetExtension(source.FilePath).ToLowerInvariant()] = source.FilePath };
+        var files = source.Archive is { } archive
+            ? new Dictionary<string, string> { [InstallerArchive.AttachmentName] = archive.Path }
+            : new Dictionary<string, string> { ["installer" + Path.GetExtension(source.FilePath).ToLowerInvariant()] = source.FilePath };
         if (source.NeedsIss) files["setup.iss"] = Path.Combine(responses!, "setup.iss");
         if (proof.UninstallResponseFileCreated) files["uninstall.iss"] = Path.Combine(responses!, "uninstall.iss");
         return files;
@@ -78,14 +89,19 @@ public static class DattoRmmDeploymentService
     {
         var reason = BlockReason(source, entry, proof, responses); if (reason is not null) throw new InvalidOperationException(reason);
         var hashes = proof.ComponentDeployment is not null ? new Dictionary<string,string>(proof.ComponentDeployment.Files) :
-            Sources(source, proof, responses).ToDictionary(f => f.Key, f => f.Key.StartsWith("installer.", StringComparison.Ordinal) ? proof.InstallerSha256! : RegressionHistoryService.HashFile(f.Value));
+            Sources(source, proof, responses).ToDictionary(f => f.Key, f => f.Key == InstallerArchive.AttachmentName ? source.Archive!.Sha256 :
+                f.Key.StartsWith("installer.", StringComparison.Ordinal) ? proof.InstallerSha256! : RegressionHistoryService.HashFile(f.Value));
         var config = Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new { Installer = hashes.Keys.First(), Files = hashes }));
         // Display names belong in JSON metadata. Keep executable script literals independent of product names.
-        var install = proof.ComponentDeployment is not null ? GintDeploymentPlanService.InstallScript : ImmyBotScriptGenerator.Generate(source, proof.CombinedSilentArguments ?? proof.BaseSilentArguments ?? "", "Validated application");
+        var install = proof.ComponentDeployment is not null ? GintDeploymentPlanService.InstallScript : ImmyBotScriptGenerator.Generate(source, proof.CombinedSilentArguments ?? proof.BaseSilentArguments ?? "", "Validated application", source.Archive is null ? null : proof);
+        if (source.Archive is null && source.Kind == InstallerKind.Msi)
+            install += Environment.NewLine + ImmyBotScriptGenerator.ActDesktopShortcut(proof, remove: false);
+        if (RequiresPreinstalledNetFx3(proof)) install = NetFx3InstallCheck + Environment.NewLine + install;
         var detection = ValidatedDetectionScriptService.Generate(proof)!;
-        var uninstall = proof.UninstallResponseFileCreated
-            ? ImmyBotScriptGenerator.GenerateUninstall(entry, "Validated application", proof)
-            : NativeUninstall(proof.UninstallCandidate!);
+        var uninstall = proof.UninstallResponseFileCreated || (source.Archive is { } archive && Project2007Deployment.Matches(archive, proof))
+            ? ImmyBotScriptGenerator.GenerateUninstall(entry, "Validated application", proof, source.Archive)
+            : NativeUninstall(proof.UninstallCandidate!) + Environment.NewLine +
+                ImmyBotScriptGenerator.ActDesktopShortcut(proof, remove: true);
         var replacements = new Dictionary<string,string> { ["__CONFIG__"]=config,["__INSTALL__"]=install,["__DETECT__"]=detection,["__UNINSTALL__"]=uninstall };
         var component = Regex.Replace(ComponentTemplate, "__CONFIG__|__INSTALL__|__DETECT__|__UNINSTALL__", m => replacements[m.Value]);
         return new(Launcher, component, install, detection, uninstall);
@@ -111,9 +127,11 @@ if ($Process.ExitCode -notin @(0,1605,3010)) { throw ('Uninstall failed with exi
         var locks = new List<FileStream>();
         try
         {
-            using var original = new FileStream(source.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-            if (!Convert.ToHexString(SHA256.HashData(original)).Equals(proof.InstallerSha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Installer bytes changed after validation. Retest the installer before export.");
-            foreach (var path in files.Values) locks.Add(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read));
+            using var original = source.Archive is null ? File.OpenRead(source.FilePath) : null;
+            if (original is not null && !Convert.ToHexString(SHA256.HashData(original)).Equals(proof.InstallerSha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Installer bytes changed after validation. Retest the installer before export.");
+            foreach (var file in files)
+                locks.Add(file.Key == InstallerArchive.AttachmentName ? source.Archive!.OpenVerified() : File.OpenRead(file.Value));
             if (locks.Any(f => f.Length > 3_000_000_000L) || locks.Sum(f => f.Length) > 4_999_000_000L) throw new InvalidOperationException("The component exceeds Datto RMM attachment limits.");
             if (proof.ComponentDeployment is not null)
             {
@@ -126,10 +144,18 @@ if ($Process.ExitCode -notin @(0,1605,3010)) { throw ('Uninstall failed with exi
             using (var zip = ZipFile.Open(temporary, ZipArchiveMode.Create))
             {
                 void Text(string name, string text) { using var writer = new StreamWriter(zip.CreateEntry(name).Open(), new UTF8Encoding(name.EndsWith(".ps1", StringComparison.Ordinal))); writer.Write(text); }
-                Text("Component.cmd", scripts.Launcher); Text("DattoComponent.ps1", scripts.Component); Text("README.md", Instructions + (proof.ComponentDeployment is null ? "" : GintInstructions));
+                Text("Component.cmd", scripts.Launcher); Text("DattoComponent.ps1", scripts.Component); Text("README.md", Instructions + (proof.ComponentDeployment is null ? "" : GintInstructions) +
+                    (source.Archive is null ? "" : "\n\nAttach installer-source.zip as one file. The component verifies and extracts it before installation.") +
+                    (source.Archive is { } archive && Project2007Deployment.Matches(archive, proof)
+                        ? "\n\nProject 2007 uses the same ZIP for installation and removal and generates the validated silent XML at runtime. " +
+                            "Review any reboot warning before moving on to another job."
+                        : "") +
+                    (RequiresPreinstalledNetFx3(proof)
+                        ? "\n\nEnable .NET Framework 3.5 on the target before running Install. The component checks Windows for the prerequisite and stops with IA_ERROR if it is missing. Detect and Uninstall do not require this check."
+                        : ""));
                 Text("component-settings.json", JsonSerializer.Serialize(new { Name = entry.DisplayName, Target = "Datto RMM", Category = "Applications", ScriptType = "Batch", RunAs = "LocalSystem", PowerShell = "Windows PowerShell 5.1, 64-bit", TimeoutSeconds = proof.ComponentDeployment is null ? 1200 : 2400, InputVariable = new { Name = "IAAction", Type = "Selection", Default = "Detect", Values = new[] { "Detect", "Install", "Uninstall" } }, WarningPostCondition = "IA_REBOOT_REQUIRED=1", SandboxValidated = true, DattoTenantValidated = false, ComponentRecipe = proof.ComponentDeployment?.Recipe, SandboxCompatibility = proof.SandboxCompatibility }, new JsonSerializerOptions { WriteIndented = true }));
                 var index = 0;
-                foreach (var file in files) { var stream = locks[index++]; stream.Position = 0; using var target = zip.CreateEntry(file.Key, CompressionLevel.Optimal).Open(); stream.CopyTo(target); }
+                foreach (var file in files) { var stream = locks[index++]; stream.Position = 0; using var target = zip.CreateEntry(file.Key, file.Key == InstallerArchive.AttachmentName ? CompressionLevel.NoCompression : CompressionLevel.Optimal).Open(); stream.CopyTo(target); }
             }
             File.Move(temporary, output, true);
         }
@@ -141,8 +167,20 @@ if ($Process.ExitCode -notin @(0,1605,3010)) { throw ('Uninstall failed with exi
 setlocal
 set "IA_POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 if exist "%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" set "IA_POWERSHELL=%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
-"%IA_POWERSHELL%" -NoProfile -NonInteractive -File ".\DattoComponent.ps1"
+set "IA_COMPONENT=%~dp0DattoComponent.ps1"
+if not exist "%IA_COMPONENT%" set "IA_COMPONENT=%CD%\DattoComponent.ps1"
+"%IA_POWERSHELL%" -NoProfile -NonInteractive -File "%IA_COMPONENT%"
 exit /b %errorlevel%
+""";
+
+    private const string NetFx3InstallCheck = """
+$netFx3 = Get-ItemProperty -LiteralPath @(
+    'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v3.5',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\NET Framework Setup\NDP\v3.5'
+) -Name Install -ErrorAction SilentlyContinue | Where-Object { $_.Install -eq 1 } | Select-Object -First 1
+if (-not $netFx3) {
+    throw 'Enable .NET Framework 3.5 on this device, then rerun the Datto Install job.'
+}
 """;
 
     public const string Instructions = """
@@ -160,7 +198,7 @@ Output: IA_DETECTED=1/0; IA_ACTION; IA_REBOOT_REQUIRED=1 when needed. Exit 0 mea
 
 This ZIP is a component-creation kit, not a native .cpt import. After creating/testing the component in Datto RMM, its normal Export action can produce a native .cpt. Tenant/API upload and job submission are not performed by Installer Analyzer.
 
-Supported initial scope: lifecycle-validated single-file machine-wide MSI/EXE deployments and recorded InstallShield response files. Per-user, MSIX, transforms, separate extracted payloads, external .NET 3.5 prerequisite provisioning and credential-bearing arguments need additional integration. Sandbox proof does not establish Datto tenant acceptance. No Datto credentials are requested or included. Review generated installer arguments before sharing the kit.
+Supported initial scope: lifecycle-validated single-file machine-wide MSI/EXE deployments and recorded InstallShield response files. Per-user, MSIX, transforms, separate extracted payloads and credential-bearing arguments need additional integration. Sandbox proof does not establish Datto tenant acceptance. No Datto credentials are requested or included. Review generated installer arguments before sharing the kit.
 
 Official documentation:
 https://rmm.datto.com/help/en/Content/3NEWUI/Automation/Components/CreateAComponent.htm
@@ -214,7 +252,7 @@ try {
     $IAAction = if ([string]::IsNullOrWhiteSpace($env:IAAction)) { 'Detect' } else { $env:IAAction.Trim() }
     if ($IAAction -notin @('Detect','Install','Uninstall')) { throw 'IAAction must be Detect, Install or Uninstall.' }
     $IAConfig = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__CONFIG__')) | ConvertFrom-Json
-    $InstallerFolder = (Get-Location).Path
+    $InstallerFolder = $PSScriptRoot
     Assert-IAAttachments $InstallerFolder $IAConfig.Files
     foreach ($item in $IAConfig.Files.PSObject.Properties) {
         $path = Join-Path $InstallerFolder $item.Name

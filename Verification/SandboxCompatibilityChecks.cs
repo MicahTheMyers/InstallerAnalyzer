@@ -1,7 +1,7 @@
 using System.IO;
 using System.Reflection;
 using System.Text.Json;
-using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using InstallerAnalyzer;
 using InstallerAnalyzer.Models;
 using InstallerAnalyzer.Services;
@@ -10,7 +10,7 @@ internal static class SandboxCompatibilityChecks
 {
     public static void Run(MainWindow window, string root, Action<bool, string> check)
     {
-        check(window.FindName("SandboxCompatibilityCheck") is CheckBox, "Sandbox compatibility has an explicit Settings control");
+        check(window.FindName("SandboxCompatibilityCheck") is ToggleButton, "Sandbox compatibility has a Settings switch");
         var settingsType = typeof(MainWindow).GetNestedType("AppSettings", BindingFlags.NonPublic)!;
         var settings = Activator.CreateInstance(settingsType, true)!;
         var property = settingsType.GetProperty("SandboxInstallerCompatibility")!;
@@ -19,7 +19,7 @@ internal static class SandboxCompatibilityChecks
         var restored = JsonSerializer.Deserialize(JsonSerializer.Serialize(settings, settingsType), settingsType)!;
         check((bool)property.GetValue(restored)!, "Sandbox compatibility preference survives a settings round trip");
         var core = typeof(SandboxIssRecorder).GetMethod("BuildDiscoveryScriptCore", BindingFlags.NonPublic | BindingFlags.Static)!;
-        string Build(bool enabled) => (string)core.Invoke(null, new object[] { "fixture.msi", InstallerKind.Msi, "/qn /norestart", "", true, true, new MsiMetadata(), false, "", "", enabled, null! })!;
+        string Build(bool enabled) => (string)core.Invoke(null, new object[] { "fixture.msi", InstallerKind.Msi, "/qn /norestart", "", true, true, new MsiMetadata(), false, "", "", enabled, null!, null! })!;
         var enabled = Build(true);
         check(enabled.Contains("Ensure-SandboxInstallerCompatibility $true") && enabled.IndexOf("Ensure-SandboxInstallerCompatibility $true", StringComparison.Ordinal) < enabled.IndexOf("$script:NativeMsiBaselineState=", StringComparison.Ordinal), "Enabled guest preparation runs before installer discovery");
         var localBuilder = typeof(SandboxIssRecorder).GetMethod("BuildDiscoveryScript", BindingFlags.NonPublic | BindingFlags.Static)!;

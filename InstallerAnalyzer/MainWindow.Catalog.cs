@@ -35,6 +35,7 @@ public partial class MainWindow
     }
     private void CatalogSelection_Changed(object sender, SelectionChangedEventArgs e)
     {
+        UpdateCatalogSyncSelection();
         if (CatalogList.SelectedItem is not CatalogRecord row) { CatalogDetailsText.Text = "Select an entry to inspect its strategy and validation history."; return; }
         var sb = new StringBuilder($"{row.Product} {row.Version}\n{row.Publisher}\n\n");
         sb.AppendLine($"Origin: {row.Origin}\nArchitecture: {row.Architecture}\nInstaller technology: {row.Family}\nSHA-256: {row.Sha256}");

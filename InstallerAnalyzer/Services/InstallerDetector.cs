@@ -26,9 +26,12 @@ public sealed class InstallerDetector
         "Adobe Bootstrapper Application", "ADOBE APPLICATION Manager", "Adobe_Download_"
     };
 
-    public AnalysisResult Analyze(string path)
+    public AnalysisResult Analyze(string path) => Analyze(path, null);
+
+    internal AnalysisResult Analyze(string path, InstallerArchive? archive)
     {
-        var result = AnalyzeCore(path);
+        var result = AnalyzeCore(path, archive);
+        result.Archive = archive;
         result.Identity = InstallerIdentityService.Inspect(path);
         if (result.Kind == InstallerKind.Msi)
         {
@@ -43,7 +46,7 @@ public sealed class InstallerDetector
         return result;
     }
 
-    private AnalysisResult AnalyzeCore(string path)
+    private AnalysisResult AnalyzeCore(string path, InstallerArchive? archive)
     {
         var r = new AnalysisResult { FilePath = path };
         var extension = Path.GetExtension(path);
@@ -61,6 +64,24 @@ public sealed class InstallerDetector
         }
         var vi = FileVersionInfo.GetVersionInfo(path);
         r.ProductName = vi.ProductName ?? ""; r.CompanyName = vi.CompanyName ?? ""; r.FileVersion = vi.FileVersion ?? ""; r.Architecture = GetArchitecture(path);
+        if (extension.Equals(".exe", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(r.CompanyName.Trim(), "Microsoft Corporation", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(r.ProductName.Trim(), "Microsoft Setup Bootstrapper", StringComparison.OrdinalIgnoreCase) &&
+            (vi.FileMajorPart == 12 || vi.ProductMajorPart == 12))
+        {
+            r.Kind = InstallerKind.Bootstrapper;
+            r.Confidence = archive?.OfficeCorePackage is null ? 75 : 95;
+            r.ProductName = "Microsoft Office 2007 Setup";
+            r.Evidence.Add("Microsoft Setup Bootstrapper version 12 identifies the Office 2007 setup engine.");
+            if (archive?.OfficeCorePackage is { } corePackage)
+            {
+                r.Evidence.Add("The ZIP contains the Office core MSI next to this setup: " + corePackage);
+                if (corePackage.Equals(@"PrjPro.WW\PrjProWW.msi", StringComparison.OrdinalIgnoreCase))
+                    r.ProductName = "Microsoft Office Project Professional 2007";
+            }
+            r.Evidence.Add("Sandbox validates the installed product and unattended commands.");
+            return r;
+        }
         if (string.Equals(r.CompanyName.Trim(), "Microsoft Corporation", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(vi.OriginalFilename, "MicrosoftEdgeUpdateSetup.exe", StringComparison.OrdinalIgnoreCase) &&
             Regex.IsMatch(Path.GetFileName(path), @"^MicrosoftEdgeWebView2(?:Setup|RuntimeInstaller(?:X64|X86|ARM64))\.exe$", RegexOptions.IgnoreCase))
@@ -191,17 +212,15 @@ public sealed class InstallerDetector
             r.Evidence.Add("Adobe Download Manager metadata identifies the launcher, not the deployed Acrobat/Reader application; Sandbox discovery will refine product, version, and architecture.");
         }
 
-        // Microsoft Office web/bootstrapper installers are Click-to-Run launchers. They often
-        // contain incidental NSIS/InstallShield strings from embedded resources, so recognize
-        // Microsoft Office metadata plus Click-to-Run/product evidence as a bootstrapper family.
+        // Office setup can include incidental strings from other installer engines.
         var officeMetadata = meta.Contains("Microsoft Office", StringComparison.OrdinalIgnoreCase)
             && meta.Contains("Microsoft", StringComparison.OrdinalIgnoreCase);
         var officeC2rEvidence = Has(found, "OfficeClickToRun") || Has(found, "OfficeC2RClient")
-            || Has(found, "ClickToRun") || Has(found, "O365HomePremRetail") || Has(found, "Microsoft Office");
+            || Has(found, "ClickToRun") || Has(found, "O365HomePremRetail");
         if (officeMetadata && officeC2rEvidence)
             Hit(InstallerKind.Bootstrapper, 90, "Microsoft Office metadata and Click-to-Run bootstrapper evidence detected.");
         else if (officeMetadata)
-            Hit(InstallerKind.Bootstrapper, 75, "Microsoft Office bootstrapper metadata detected; Sandbox will confirm Click-to-Run behavior.");
+            Hit(InstallerKind.Bootstrapper, 75, "Microsoft Office bootstrapper metadata detected. Sandbox will identify the deployment mechanism.");
 
         if (scores.Count == 0)
         {
@@ -261,7 +280,7 @@ public sealed class InstallerDetector
         }
         else if (r.Kind == InstallerKind.Bootstrapper && officeMetadata)
         {
-            r.Evidence.Add("Microsoft Click-to-Run behavior will be confirmed dynamically in Windows Sandbox; no conventional MSI/NSIS silent switches are assumed.");
+            r.Evidence.Add("Windows Sandbox will validate the Office setup mechanism and unattended arguments.");
         }
         r.SuggestedArguments = r.Kind switch
         {

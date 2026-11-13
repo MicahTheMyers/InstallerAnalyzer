@@ -6,9 +6,21 @@ public static class ImmyBotScriptGenerator
 {
     public static string Generate(AnalysisResult r, string arguments, string appName, InstallAnalysis? proof = null)
     {
+        if (r.Archive is null) return GenerateInstall(r, arguments, appName, proof);
+        if (r.Archive.DeploymentBlockReason(proof) is { } reason)
+            return "# " + reason;
+        if (Project2007Deployment.Matches(r.Archive, proof))
+            return Project2007Deployment.Generate(r.Archive, proof!, uninstall: false);
+        var validatedArguments = proof!.CombinedSilentArguments ?? proof.BaseSilentArguments ?? "";
+        return r.Archive.WrapInstallScript(GenerateInstall(r, validatedArguments, "Validated application", proof));
+    }
+
+    private static string GenerateInstall(AnalysisResult r, string arguments, string appName, InstallAnalysis? proof)
+    {
         appName = string.IsNullOrWhiteSpace(appName) ? Path.GetFileNameWithoutExtension(r.FilePath) : appName.Trim();
         arguments ??= "";
-        if (r.Kind == InstallerKind.Msix)
+        var workingDirectory = r.Archive is null ? "" : " -WorkingDirectory (Split-Path -Parent $Installer)";
+        if (r.Archive is null && r.Kind == InstallerKind.Msix)
         {
             var dependencySetup = "";
             var dependencyArgument = "";
@@ -38,8 +50,9 @@ Write-Host "{{appName}} package installation completed successfully."
 """;
         }
 
-        if (r.Kind == InstallerKind.Msi)
+        if (r.Archive is null ? r.Kind == InstallerKind.Msi : r.Archive.Entry.EndsWith(".msi", StringComparison.OrdinalIgnoreCase))
         {
+            var shortcut = ActDesktopShortcut(proof, remove: false);
             return $$"""
 $Installer = $InstallerFile
 
@@ -51,7 +64,7 @@ if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) {
 
 $Arguments = '/i "' + $Installer + '" ' + '{{arguments.Replace("'", "''")}}'
 Write-Host "Starting {{appName}} installation..."
-$Process = Start-Process -FilePath "msiexec.exe" -ArgumentList $Arguments -Wait -PassThru
+$Process = Start-Process -FilePath "msiexec.exe" -ArgumentList $Arguments -Wait -PassThru{{workingDirectory}}
 Write-Host "{{appName}} installer exited with code $($Process.ExitCode)"
 
 switch ($Process.ExitCode) {
@@ -59,6 +72,7 @@ switch ($Process.ExitCode) {
     3010 { Write-Host "Installation completed successfully. A reboot is required." }
     default { throw "{{appName}} installation failed with exit code $($Process.ExitCode)" }
 }
+{{shortcut}}
 """;
         }
 
@@ -67,11 +81,13 @@ switch ($Process.ExitCode) {
         var responseArguments = Regex.Replace(arguments, @"(?i)(?<!\S)/f[12](?:""[^""]*""|\S+)", "").Trim();
         responseArguments = Regex.Replace(responseArguments, @"(?i)(?<!\S)/r(?=\s|$)", "").Trim();
         if (!Regex.IsMatch(responseArguments, @"(?i)(?<!\S)/s(?=\s|$)")) responseArguments = ("/s " + responseArguments).Trim();
-        var argumentLine = r.NeedsIss
+        var needsResponse = r.Archive is null ? r.NeedsIss :
+            proof?.SelectedSilentStrategy?.StartsWith("Recorded InstallShield", StringComparison.OrdinalIgnoreCase) == true;
+        var argumentLine = needsResponse
             ? "$Arguments = '" + responseArguments.Replace("'", "''") + "' + ' /f1\"' + $ResponseFile + '\"'"
             : "$Arguments = '" + arguments.Replace("'", "''") + "'";
 
-        var response = r.NeedsIss ? """
+        var response = needsResponse ? """
 $ResponseFile = Join-Path $InstallerFolder "setup.iss"
 Write-Host "Response file: $ResponseFile"
 if (-not (Test-Path -LiteralPath $ResponseFile -PathType Leaf)) {
@@ -95,7 +111,7 @@ $Process = Start-Process `
     -FilePath $Installer `
     -ArgumentList $Arguments `
     -Wait `
-    -PassThru
+    -PassThru{{workingDirectory}}
 
 Write-Host "{{appName}} installer exited with code $($Process.ExitCode)"
 
@@ -105,6 +121,80 @@ switch ($Process.ExitCode) {
     default { throw "{{appName}} installation failed with exit code $($Process.ExitCode)" }
 }
 """;
+    }
+
+    internal static string ActDesktopShortcut(InstallAnalysis? proof, bool remove)
+    {
+        if (proof is null || string.IsNullOrWhiteSpace(proof.PrimaryKey) ||
+            !proof.NewUninstallEntries.Any(entry => entry.Key == proof.PrimaryKey &&
+                string.Equals(entry.ProductCode, "{38FE5475-B2E9-44C9-A93B-FD0D942D1FF3}", StringComparison.OrdinalIgnoreCase)) ||
+            !proof.DetectionStrategies.Any(rule => rule.Validated && rule.Type == "ExecutablePathAndVersion" &&
+                string.Equals(rule.Identity, @"C:\Program Files\ACT\ActInstallDir\Act!.exe", StringComparison.OrdinalIgnoreCase)))
+            return "";
+
+        var operation = remove ? """
+if (Test-Path -LiteralPath $actShortcutPath -PathType Leaf -ErrorAction Stop) {
+    $actShortcut = (New-Object -ComObject WScript.Shell -ErrorAction Stop).CreateShortcut($actShortcutPath)
+    if ($actShortcut.Description -eq 'ACT! shortcut created by Installer Analyzer' -and $actShortcut.TargetPath -eq $actExe) {
+        Remove-Item -LiteralPath $actShortcutPath -ErrorAction Stop
+    }
+}
+""" : """
+if ((Test-Path -LiteralPath $actExe -PathType Leaf -ErrorAction Stop) -and
+    !(Test-Path -LiteralPath $actShortcutPath -ErrorAction Stop)) {
+    $actShortcut = (New-Object -ComObject WScript.Shell -ErrorAction Stop).CreateShortcut($actShortcutPath)
+    $actShortcut.TargetPath = $actExe
+    $actShortcut.WorkingDirectory = Split-Path -Parent $actExe
+    $actShortcut.Description = 'ACT! shortcut created by Installer Analyzer'
+    $actShortcut.Save()
+}
+""";
+        return """
+$actExe = 'C:\Program Files\ACT\ActInstallDir\Act!.exe'
+$actShortcutPath = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'ACT!.lnk'
+""" + Environment.NewLine + operation;
+    }
+
+    public static string GenerateVersionDetection(UninstallEntry? entry)
+    {
+        if (entry is null) return "# Run Sandbox analysis and select the installed application to generate version detection.";
+        if ((entry.Key ?? "").StartsWith("APPX::", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(entry.DisplayName))
+            return "$package = Get-AppxPackage -Name " + Quote(entry.DisplayName) +
+                " -ErrorAction Stop | Sort-Object Version -Descending | Select-Object -First 1\n" +
+                "if ($null -ne $package) { [string]$package.Version }";
+
+        string predicate;
+        if (Guid.TryParse(entry.ProductCode, out var productCode))
+            predicate = "$_.PSChildName -eq " + Quote(productCode.ToString("B"));
+        else if (!string.IsNullOrWhiteSpace(entry.DisplayName))
+            predicate = "$_.DisplayName -eq " + Quote(entry.DisplayName);
+        else
+            return "# The selected application needs a product code or display name for version detection.";
+
+        return $$"""
+# ImmyBot software detection returns the installed version or no output.
+$roots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+)
+$installed = foreach ($root in $roots) {
+    if (Test-Path -LiteralPath $root -ErrorAction Stop) {
+        Get-ChildItem -LiteralPath $root -ErrorAction Stop |
+            Get-ItemProperty -ErrorAction Stop |
+            Where-Object { {{predicate}} }
+    }
+}
+$versions = @($installed | ForEach-Object {
+    $version = ([string]$_.DisplayVersion).Trim()
+    if ($version -match '^([0-9]+\.[0-9]+\.[0-9]+)\.0$') { $version = $Matches[1] }
+    if ($version) { $version }
+} | Select-Object -Unique)
+if ($versions.Count -gt 1) { throw 'Multiple installed versions match this software detection rule.' }
+if ($versions.Count -eq 1) { $versions[0] }
+""";
+
+        static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
     }
 
     public static string GenerateDetection(UninstallEntry? e, string appName)
@@ -122,8 +212,13 @@ switch ($Process.ExitCode) {
         return $"$Installed = Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue | Where-Object {{ $_.DisplayName -eq '{name}'{(version.Length>0 ? $" -and $_.DisplayVersion -eq '{version}'" : "")} }}\nreturn [bool]$Installed";
     }
 
-    public static string GenerateUninstall(UninstallEntry? e, string appName, InstallAnalysis? analysis = null)
+    public static string GenerateUninstall(UninstallEntry? e, string appName, InstallAnalysis? analysis = null, InstallerArchive? archive = null)
     {
+        if (archive?.DeploymentBlockReason(analysis) is { } reason) return "# " + reason;
+        if (archive is not null && Project2007Deployment.Matches(archive, analysis))
+            return string.Equals(e?.Key, analysis!.PrimaryKey, StringComparison.OrdinalIgnoreCase)
+                ? Project2007Deployment.Generate(archive, analysis, uninstall: true)
+                : "# Select the application that passed the recorded lifecycle.";
         if (e is null) return "# Run the Sandbox installation analysis to generate an uninstall script.";
         if ((e.Key ?? "").StartsWith("APPX::", StringComparison.OrdinalIgnoreCase))
         {
@@ -138,7 +233,8 @@ switch ($Process.ExitCode) {
             if (analysis?.SilentUninstallValidated == true &&
                 command?.StartsWith(prefix + " ", StringComparison.OrdinalIgnoreCase) == true)
                 arguments = command["msiexec.exe ".Length..];
-            return $"$Arguments = '{arguments.Replace("'", "''")}'\n$Process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $Arguments -Wait -PassThru\nif ($Process.ExitCode -notin @(0, 1605, 3010)) {{ throw '{appName} uninstall failed with exit code ' + $Process.ExitCode }}";
+            return $"$Arguments = '{arguments.Replace("'", "''")}'\n$Process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $Arguments -Wait -PassThru\nif ($Process.ExitCode -notin @(0, 1605, 3010)) {{ throw '{appName} uninstall failed with exit code ' + $Process.ExitCode }}\n" +
+                ActDesktopShortcut(analysis, remove: true);
         }
         if (analysis?.SilentUninstallValidated == true && analysis.UninstallResponseFileCreated && !string.IsNullOrWhiteSpace(e.UninstallString))
         {

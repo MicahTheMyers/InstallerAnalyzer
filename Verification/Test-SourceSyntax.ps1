@@ -36,8 +36,8 @@ $match=[regex]::Match($source,'(?s)var script = """\r?\n(.*?)\r?\n""";')
 if(-not $match.Success){throw 'Discovery script template not found'}
 $count=0
 foreach($kind in @('Unknown','Msi','Msix','InstallShield','InnoSetup','Nsis','WixBurn','Squirrel','NvidiaSfx','QSetup','Bootstrapper')){
-  $values=@{'__INSTALLER__'='fixture.msi';'__KIND__'=$kind;'__BASE_ARGS__'='/qn /norestart';'__ADDITIONAL_ARGS__'='';'__BLOCK_MCAFEE__'='$true';'__SILENT_ONLY__'='$true';'__RECORD_RESPONSES__'='$false';'__ROADMAP_HELPERS__'=$helpers;'__MSI_METADATA__'=$encoded;'__NETFX_EVIDENCE__'='';'__SANDBOX_COMPATIBILITY__'='$false';'__COMPONENT_PLAN__'=''}
-  $assembled=[regex]::Replace($match.Groups[1].Value,'__(?:INSTALLER|KIND|BASE_ARGS|ADDITIONAL_ARGS|BLOCK_MCAFEE|SILENT_ONLY|RECORD_RESPONSES|ROADMAP_HELPERS|MSI_METADATA|NETFX_EVIDENCE|SANDBOX_COMPATIBILITY|COMPONENT_PLAN)__',[Text.RegularExpressions.MatchEvaluator]{param($m)$values[$m.Value]})
+  $values=@{'__INSTALLER__'='fixture.msi';'__ARCHIVE_ENTRY__'='';'__ARCHIVE_HASH__'='';'__KIND__'=$kind;'__BASE_ARGS__'='/qn /norestart';'__ADDITIONAL_ARGS__'='';'__BLOCK_MCAFEE__'='$true';'__SILENT_ONLY__'='$true';'__RECORD_RESPONSES__'='$false';'__ROADMAP_HELPERS__'=$helpers;'__MSI_METADATA__'=$encoded;'__NETFX_EVIDENCE__'='';'__SANDBOX_COMPATIBILITY__'='$false';'__COMPONENT_PLAN__'=''}
+  $assembled=[regex]::Replace($match.Groups[1].Value,'__(?:INSTALLER|ARCHIVE_ENTRY|ARCHIVE_HASH|KIND|BASE_ARGS|ADDITIONAL_ARGS|BLOCK_MCAFEE|SILENT_ONLY|RECORD_RESPONSES|ROADMAP_HELPERS|MSI_METADATA|NETFX_EVIDENCE|SANDBOX_COMPATIBILITY|COMPONENT_PLAN)__',[Text.RegularExpressions.MatchEvaluator]{param($m)$values[$m.Value]})
   $tokens=$null;$errors=$null
   $ast=[Management.Automation.Language.Parser]::ParseInput($assembled,[ref]$tokens,[ref]$errors)
   if($errors.Count -gt 0){$errors | Format-List | Out-String | Write-Output;throw ('Parse failed: '+$kind)}

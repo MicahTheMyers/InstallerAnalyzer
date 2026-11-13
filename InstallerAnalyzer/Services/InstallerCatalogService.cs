@@ -105,6 +105,8 @@ public static partial class InstallerCatalogService
     }
     public static bool Remember(AnalysisResult installer, InstallAnalysis? proof, string source = "Analyze", string? responseFolder = null)
     {
+        // The single-file catalog cannot reuse validation bound to an entire archive.
+        if (installer.Archive is not null || proof?.InstallerArchiveSha256 is not null) return false;
         if (proof is not null && Recorded.TryGetValue(proof, out _)) return false;
         if (!LifecycleValidationService.IsComplete(proof)) return false;
         // IsComplete guarantees non-null, identity and clean lifecycle evidence.

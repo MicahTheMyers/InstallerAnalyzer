@@ -24,7 +24,7 @@ internal static class LiveSandboxChecks
         return System.Text.RegularExpressions.Regex.Matches(environments.GetRawText(), @"[a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}")
             .Select(m => m.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
-    public static int Run(string root, string installerPath, TimeSpan? budget = null, bool requirePropertySnapshot = false)
+    public static int Run(string root, string installerPath, TimeSpan? budget = null, bool requirePropertySnapshot = false, string? archiveEntry = null)
     {
         Directory.CreateDirectory(root);
         var before = EnvironmentIds();
@@ -35,9 +35,13 @@ internal static class LiveSandboxChecks
         SandboxIssSession? session = null;
         try
         {
+            InstallerArchive? archive = null;
+            if (archiveEntry is not null)
+                archive = InstallerArchive.Inspect(installerPath, archiveEntry, Path.Combine(root, "Inspection"), out installerPath);
             var installer = new InstallerDetector().Analyze(installerPath);
+            installer.Archive = archive;
             Console.WriteLine("Installer: " + Path.GetFileName(installerPath) + "; hash " + installer.Identity.Sha256);
-            session = SandboxIssRecorder.Start(installerPath, installer.Kind, false, installer.SuggestedArguments, "", true, true);
+            session = SandboxIssRecorder.Start(installerPath, installer.Kind, false, installer.SuggestedArguments, "", true, true, archive: archive);
             Console.WriteLine("Fresh Sandbox launched; session " + session.SessionFolder);
             var start = DateTime.UtcNow; string previousStage = "";
             while (DateTime.UtcNow - start < (budget ?? TimeSpan.FromMinutes(14)))
@@ -82,6 +86,16 @@ internal static class LiveSandboxChecks
             Console.WriteLine("PASS installer-scoped process observations: " + proof.ProcessTree.Count);
             if (!proof.SilentStrategyAttempts.Any(a => a.StartedAt is not null && a.CompletedAt is not null)) throw new Exception("Attempt timestamps are missing.");
             Console.WriteLine("PASS timestamped strategy attempts");
+            if (archive is not null)
+            {
+                if (!archive.SupportsDeployment(proof)) throw new Exception("The lifecycle did not bind the validated ZIP to its selected installer.");
+                var entry = proof.NewUninstallEntries.Single(e => e.Key == proof.PrimaryKey);
+                ImmyBotPackageExporter.Export(Path.Combine(root, "ImmyBot.zip"), installerPath, null, null, archive: archive, proof: proof);
+                DattoRmmDeploymentService.Export(Path.Combine(root, "DattoRMM.zip"), installer, entry, proof, null);
+                File.WriteAllText(Path.Combine(root, "ImmyBot-install.ps1"), ImmyBotScriptGenerator.Generate(installer, installer.SuggestedArguments, "ZIP fixture", proof));
+                Console.WriteLine("PASS ImmyBot and Datto RMM exports retain the ZIP validated in Sandbox");
+                return 0;
+            }
             if (!InstallerCatalogService.Remember(installer, proof, "Live verification")) throw new Exception("Fresh lifecycle did not enter the isolated test catalog.");
             var record = InstallerCatalogService.ReadCatalog().Single();
             if (record.Detection?.Validated != true || record.History.Count != 1) throw new Exception("Catalog did not retain fresh detection evidence and history.");

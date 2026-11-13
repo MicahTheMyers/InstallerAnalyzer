@@ -27,6 +27,17 @@ internal static class Program
     {
         var root = Path.GetFullPath(args[0]);
         Directory.CreateDirectory(root);
+        if (args.Length >= 2 && args[1] == "--built-in-catalog")
+        {
+            var read = typeof(MainWindow).GetMethod("ReadBuiltInCatalogFile", BindingFlags.NonPublic | BindingFlags.Static)!;
+            var address = ((string)read.Invoke(null, new object[] { "catalog-server.txt" })!).Trim();
+            var publicKey = (string)read.Invoke(null, new object[] { "catalog-signing-public.pem" })!;
+            using var key = System.Security.Cryptography.ECDsa.Create();
+            key.ImportFromPem(publicKey);
+            Check(Uri.TryCreate(address, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps &&
+                publicKey.Contains("-----BEGIN PUBLIC KEY-----", StringComparison.Ordinal), "Build embeds an HTTPS catalog address and a valid public signing key");
+            return 0;
+        }
         if(args.Length>=4 && args[1]=="--recording-catalog-check") return RecordingCatalogChecks.Run(root,args[2],args[3],false);
         if(args.Length>=4 && args[1]=="--recover-recording-catalog") return RecordingCatalogChecks.Run(root,args[2],args[3],true);
         if(args.Length>=4 && args[1]=="--component-catalog-check") return ComponentCatalogChecks.SavedProof(root,args[2],args[3],false);
@@ -50,6 +61,7 @@ internal static class Program
         if (args.Length >= 3 && args[1] is "--live-cancel-startup" or "--live-cancel-install") return LiveCancellationChecks.Run(root, args[2], args[1] == "--live-cancel-install");
         if (args.Length >= 3 && args[1] == "--campaign") return LiveCampaignChecks.Run(root, args[2]);
         if (args.Length >= 3 && args[1] == "--live") return LiveSandboxChecks.Run(root, args[2]);
+        if (args.Length >= 4 && args[1] == "--live-archive") return LiveSandboxChecks.Run(root, args[2], archiveEntry: args[3]);
         if (args.Length >= 3 && args[1] == "--live-prerequisites") return LiveSandboxChecks.Run(root, args[2],requirePropertySnapshot:true);
         if (args.Length >= 3 && args[1] == "--live-runner") return LiveRunnerChecks.Run(root, args[2]);
         try
@@ -171,6 +183,7 @@ internal static class Program
             PayloadTraceChecks.Run(root, Check);
             BitsMappingChecks.Run(root, Check);
             BitsCompletionChecks.Run(root, Check);
+            InstallerArchiveChecks.Run(root, Check);
             ResponseFileChecks.Run(root, Check);
             PeDependencyChecks.Run(root, Check);
             MsiConditionChecks.Run(root, Check);

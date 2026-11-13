@@ -8,6 +8,7 @@ public sealed class AnalysisHistoryItem
 {
     public DateTime AnalyzedAt { get; set; }
     public string InstallerPath { get; set; } = "";
+    public string? ArchiveEntry { get; set; }
     public string ProductName { get; set; } = "";
     public string Version { get; set; } = "";
     public string InstallerType { get; set; } = "";
@@ -33,7 +34,8 @@ public static class AnalysisHistoryService
         try
         {
             Directory.CreateDirectory(Folder); var items = Load();
-            items.RemoveAll(x => string.Equals(x.InstallerPath, item.InstallerPath, StringComparison.OrdinalIgnoreCase));
+            items.RemoveAll(x => string.Equals(x.InstallerPath, item.InstallerPath, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.ArchiveEntry, item.ArchiveEntry, StringComparison.Ordinal));
             items.Insert(0, item); if (items.Count > 50) items.RemoveRange(50, items.Count - 50);
             File.WriteAllText(FilePath, JsonSerializer.Serialize(items, new JsonSerializerOptions { WriteIndented = true }));
         }

@@ -28,7 +28,9 @@ public partial class MainWindow
             try { _dattoScripts=DattoRmmDeploymentService.Generate(_result!, _selectedUninstallEntry!, _installAnalysis!, _issSession?.OutputFolder); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) { reason=ex.Message; }
         }
-        DattoStatusText.Text = reason ?? "Sandbox-validated package ready to export. Datto RMM tenant execution has not been verified.";
+        DattoStatusText.Text = reason ?? (DattoRmmDeploymentService.RequiresPreinstalledNetFx3(_installAnalysis)
+            ? "Ready to export. The Install job requires .NET Framework 3.5 on each target device."
+            : "Sandbox-validated package ready to export. Datto RMM tenant execution has not been verified.");
         DattoExportButton.IsEnabled = _dattoScripts is not null && !_dattoExportBusy;
         DattoCopyButton.IsEnabled = _dattoScripts is not null;
         var script = _dattoScripts is null ? "# " + reason : DattoScriptKindBox.SelectedIndex switch

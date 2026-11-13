@@ -6,6 +6,7 @@ public sealed class AnalysisResult
     public InstallerIdentity Identity { get; set; } = new();
     public string CatalogMatch { get; set; } = "Unknown";
     public string FilePath { get; set; } = "";
+    public Services.InstallerArchive? Archive { get; set; }
     public string FileName => Path.GetFileName(FilePath);
     public string ProductName { get; set; } = "";
     public string CompanyName { get; set; } = "";

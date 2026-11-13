@@ -42,7 +42,8 @@ public static partial class InstallerCatalogService
                 var bytes = Convert.FromBase64String(file.Base64);
                 if (bytes.Length is <= 0 or > 262144 || !Convert.ToHexString(SHA256.HashData(bytes)).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)) return false;
                 var text = (bytes.Length >= 2 && bytes[0] == 255 && bytes[1] == 254 ? Encoding.Unicode : Encoding.UTF8).GetString(bytes);
-                return text.Contains("[InstallShield Silent]", StringComparison.OrdinalIgnoreCase);
+                return text.Contains("[InstallShield Silent]", StringComparison.OrdinalIgnoreCase) ||
+                    InstallShieldResponseFormat.HasHeaderlessDialogSequence(text.TrimStart('\uFEFF'));
             }
             catch (FormatException) { return false; }
         }

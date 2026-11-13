@@ -96,7 +96,9 @@ public partial class MainWindow
         }
         else if (!visible && _aiExpanded)
         {
-            _aiExpanded = false; AiSideColumn.Width = new GridLength(0); AiBottomRow.Height = new GridLength(0);
+            _aiExpanded = false;
+            SetWorkspaceColumns(0);
+            AiBottomRow.Height = new GridLength(0);
             if (WindowState == WindowState.Normal)
             {
                 var area = SystemParameters.WorkArea;
@@ -113,15 +115,28 @@ public partial class MainWindow
         if (ActualWidth >= 1420)
         {
             AiPrivacyText.Visibility = Visibility.Visible;
-            AiSideColumn.Width = new GridLength(380); AiBottomRow.Height = new GridLength(0);
-            Grid.SetColumn(AiAssistPanel, 1); Grid.SetRow(AiAssistPanel, 0);
+            SetWorkspaceColumns(380);
+            AiBottomRow.Height = new GridLength(0);
+            Grid.SetRow(AiAssistPanel, 0);
         }
         else
         {
             AiPrivacyText.Visibility = Visibility.Collapsed;
-            AiSideColumn.Width = new GridLength(0); AiBottomRow.Height = new GridLength(Math.Clamp(ActualHeight * .42, 360, 400));
-            Grid.SetColumn(AiAssistPanel, 0); Grid.SetRow(AiAssistPanel, 1);
+            SetWorkspaceColumns(0);
+            AiBottomRow.Height = new GridLength(Math.Clamp(ActualHeight * .42, 360, 400));
+            Grid.SetRow(AiAssistPanel, 1);
         }
+    }
+
+    private void SetWorkspaceColumns(double aiSideWidth)
+    {
+        var aiOnLeft = aiSideWidth > 0 && NavigationSideBox.SelectedIndex == 1;
+        var mainWidth = new GridLength(1, GridUnitType.Star);
+        var aiWidth = new GridLength(aiSideWidth);
+        WorkspaceLeftColumn.Width = aiOnLeft ? aiWidth : mainWidth;
+        WorkspaceRightColumn.Width = aiOnLeft ? mainWidth : aiWidth;
+        Grid.SetColumn(MainWorkspace, aiOnLeft ? 1 : 0);
+        Grid.SetColumn(AiAssistPanel, aiSideWidth > 0 && !aiOnLeft ? 1 : 0);
     }
 
     private void AiProvider_Changed(object sender, SelectionChangedEventArgs e)

@@ -1,5 +1,6 @@
 using System.IO;
 using System.IO.Compression;
+using System.Text.Json;
 using InstallerAnalyzer.Models;
 using InstallerAnalyzer.Services;
 
@@ -27,5 +28,37 @@ internal static class ResponseFileChecks
             foreach(var name in new[]{"setup.iss","uninstall.iss"})
             { using var reader=new StreamReader(archive.GetEntry(name)!.Open());check(reader.ReadToEnd()==File.ReadAllText(Path.Combine(folder,name)),"Response package preserves exact "+name+" contents"); }
         }
+        const string productKey = @"Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Fixture";
+        var media = new InstallerArchive("installer.zip", @"Product\setup.exe", new string('A', 64));
+        var recorded = new InstallAnalysis
+        {
+            InstallerSha256 = RegressionHistoryService.HashFile(installer),
+            InstallerArchiveSha256 = media.Sha256,
+            InstallerArchiveEntry = media.Entry,
+            PrimaryKey = "prerequisite",
+            InitialInstallValidated = true,
+            InitialUninstallValidated = true,
+            InitialUninstallExitCode = 0,
+            CleanBaselineVerified = true,
+            UninstallResponseFileCreated = true,
+            UninstallCandidate = entry.UninstallString,
+            DetectionStrategies = [new() { Type = "UninstallRegistryKey", RegistryPath = productKey, BeforeInstall = false, AfterInstall = true }]
+        };
+        var report = Path.Combine(root, "recorded-output.zip");
+        using (var output = ZipFile.Open(report, ZipArchiveMode.Create))
+        {
+            output.CreateEntryFromFile(setup, "Output/setup.iss");
+            output.CreateEntryFromFile(uninstall, "Output/uninstall.iss");
+            using var stream = output.CreateEntry("Output/install-analysis.json").Open();
+            JsonSerializer.Serialize(stream, recorded);
+        }
+        var replay = RecordedSandboxReplay.FromZip(report);
+        replay.VerifySource(installer, media);
+        check(replay.RegistryKey == productKey && replay.Setup.SequenceEqual(File.ReadAllBytes(setup)) &&
+            replay.Uninstall.SequenceEqual(File.ReadAllBytes(uninstall)), "Replay loads exact response bytes and uses the original installed product identity");
+        bool rejected = false;
+        try { replay.VerifySource(installer, media with { Entry = @"Other\setup.exe" }); }
+        catch (InvalidDataException) { rejected = true; }
+        check(rejected, "Replay rejects a different setup entry from the same installer ZIP");
     }
 }

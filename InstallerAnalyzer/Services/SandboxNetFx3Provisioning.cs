@@ -28,7 +28,20 @@ function Invoke-NetFx3Command([string]$file,[string]$arguments,[string]$log,[int
 }
 function Get-NetFx3FeatureState {
   $query=Invoke-NetFx3Command ($env:WINDIR+'\System32\dism.exe') '/Online /Get-FeatureInfo /FeatureName:NetFx3 /English' 'netfx3-feature-query.txt' 30
-  if($query.ExitCode -ne 0){return 'Unknown'}
+  if($query.ExitCode -ne 0){
+    if($query.Text -match '(?i)\b0x800f0831\b'){
+      try {
+        $cbs=Join-Path $env:WINDIR 'Logs\CBS\CBS.log'
+        Get-Content -LiteralPath $cbs -Tail 4000 -ErrorAction Stop |
+          Where-Object {$_ -match '(?i)0x800f0831|manifest missing for package'} |
+          Select-Object -Last 40 |
+          Set-Content -LiteralPath 'C:\InstallerOutput\netfx3-servicing-errors.txt' -Encoding UTF8
+      }catch{}
+      $result.NetFx3Provisioning.ExitCode=$query.ExitCode
+      Stop-NetFx3Provisioning 'Sandbox servicing error' 'Windows Sandbox returned 0x800f0831 while checking .NET 3.5. The guest component store needs repair before it can use the feature package. See netfx3-feature-query.txt and netfx3-servicing-errors.txt when available.'
+    }
+    return 'Unknown'
+  }
   if($query.Text -match '(?im)^\s*State\s*:\s*(.+?)\s*$'){return $matches[1].Trim()}
   return 'Unknown'
 }
@@ -51,12 +64,16 @@ function Stop-NetFx3Provisioning([string]$status,[string]$detail,[bool]$needsVM=
   if($status -eq 'Restart required'){$result.RebootRequired=$true; $result.NetFx3Provisioning.RestartNeeded=$true; throw ('REBOOT REQUIRED: .NET Framework 3.5. '+$detail)}
   throw ('PREREQUISITE REQUIRED: .NET Framework 3.5. '+$detail)
 }
-function Prepare-NetFx3Sandbox {
+function Test-NetFx3SandboxUpdatePlaceholder {
   $key='HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
   $policy=Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
   $au=Get-ItemProperty -LiteralPath ($key+'\AU') -ErrorAction SilentlyContinue
   # This exact malformed loopback WSUS placeholder is the Sandbox default, not a real WSUS server.
-  if([int]$au.UseWUServer -ne 1 -or [string]$policy.WUServer -notin @('127.0.0.1:80','localhost:80')){return}
+  return [int]$au.UseWUServer -eq 1 -and [string]$policy.WUServer -in @('127.0.0.1:80','localhost:80')
+}
+function Prepare-NetFx3Sandbox {
+  if(-not (Test-NetFx3SandboxUpdatePlaceholder)){return}
+  $key='HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
   Write-Checkpoint '.NET 3.5: preparing Sandbox servicing resources'
   $root='C:\InstallerInput\NetFx3RepairSource'
   $manifest=Join-Path $root 'source-manifest.json'
@@ -83,16 +100,20 @@ function Prepare-NetFx3Sandbox {
   }
   $result.NetFx3Provisioning['RestoredComponentCount']=$restored
   Set-ItemProperty -LiteralPath ($key+'\AU') -Name UseWUServer -Value 0 -ErrorAction Stop
+  if((Get-Service -Name wuauserv -ErrorAction Stop).StartType -eq 'Disabled'){
+    Set-Service -Name wuauserv -StartupType Manual -ErrorAction Stop
+  }
   Restart-Service -Name wuauserv -Force -ErrorAction Stop
   $result.NetFx3Provisioning['GuestUpdateSourceAdjusted']=$true
   Write-Checkpoint ('.NET 3.5: Sandbox source corrected; resource folders restored='+$restored)
 }
+function Get-NetFx3CabHash { return 'DC3AF93AF5C64DC115409437D31018BAF2C3C46167806A599124BC905AE512F6' }
 function Get-NetFx3Source([int]$build) {
   if(Test-Path 'C:\InstallerInput\NetFx3Source'){return 'C:\InstallerInput\NetFx3Source'}
   if($build -notin @(26100,26200) -or $env:PROCESSOR_ARCHITECTURE -ne 'AMD64'){return ''}
   # Immutable Microsoft 24H2/25H2 FoD media, selected CAB only. No installer is downloaded/executed.
   $url='https://software-static.download.prss.microsoft.com/dbazure/888969d5-f34g-4e03-ac9d-1f9786c66749/26100.1.240331-1435.ge_release_amd64fre_CLIENT_LOF_PACKAGES_OEM.iso'
-  $expected='DC3AF93AF5C64DC115409437D31018BAF2C3C46167806A599124BC905AE512F6'
+  $expected=Get-NetFx3CabHash
   [long]$offset=4994539520; [long]$length=71321276; [long]$isoBytes=6251841536
   $folder=Join-Path $env:TEMP ('InstallerAnalyzer-NetFx3-'+[guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $folder | Out-Null
@@ -123,6 +144,24 @@ function Get-NetFx3Source([int]$build) {
   [ordered]@{Source=$url;PackageBytes=$length;Sha256=$expected;WholeIsoDownloaded=$false} | ConvertTo-Json | Set-Content C:\InstallerOutput\netfx3-source.json
   return $folder
 }
+function Add-NetFx3SandboxPackage([string]$source) {
+  $cabs=@(Get-ChildItem -LiteralPath $source -Filter '*NetFx3*.cab' -File)
+  if($cabs.Count -ne 1 -or $cabs[0].Length -ne 71321276){return $null}
+  $expected=Get-NetFx3CabHash
+  if((Get-FileHash -LiteralPath $cabs[0].FullName -Algorithm SHA256).Hash -ne $expected){return $null}
+  $folder=Join-Path $env:TEMP ('InstallerAnalyzer-NetFx3-Stage-'+[guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Path $folder -ErrorAction Stop | Out-Null
+  try {
+    $local=Join-Path $folder $cabs[0].Name
+    Copy-Item -LiteralPath $cabs[0].FullName -Destination $local -ErrorAction Stop
+    if((Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash -ne $expected){throw 'Local NetFx3 CAB hash mismatch'}
+    Write-Checkpoint '.NET 3.5: installing the verified offline package'
+    return Invoke-NetFx3Command ($env:WINDIR+'\System32\dism.exe') ('/Online /Add-Package /PackagePath:"'+$local+'" /NoRestart /English') 'netfx3-stage-package.txt' 600
+  } finally {
+    if($local){Remove-Item -LiteralPath $local -ErrorAction SilentlyContinue}
+    Remove-Item -LiteralPath $folder -ErrorAction SilentlyContinue
+  }
+}
 function Ensure-NetFx3([string]$evidence) {
   if($script:NetFx3Terminal){throw ('PREREQUISITE REQUIRED: '+$result.NetFx3Provisioning.Detail)}
   if($result.NetFx3Provisioning.RuntimeVerified){return}
@@ -139,6 +178,15 @@ function Ensure-NetFx3([string]$evidence) {
     if(Test-NetFx3Runtime){$result.NetFx3Provisioning.Status='Already available';$result.NetFx3Provisioning.RuntimeVerified=$true;return}
     Stop-NetFx3Provisioning 'Standalone installer required' 'This Windows build requires the Microsoft .NET 3.5 standalone installer. Provision it in the test environment before testing; DISM is not used on this build.'
   }
+  $sandboxPlaceholder=Test-NetFx3SandboxUpdatePlaceholder
+  if($sandboxPlaceholder){
+    try {
+      if((Get-Service -Name TrustedInstaller -ErrorAction Stop).StartType -eq 'Disabled'){
+        Set-Service -Name TrustedInstaller -StartupType Manual -ErrorAction Stop
+        Start-Service -Name TrustedInstaller -ErrorAction Stop
+      }
+    } catch {Stop-NetFx3Provisioning 'Sandbox preparation failed' ('Windows Modules Installer could not be started: '+$_.Exception.Message)}
+  }
   $state=Get-NetFx3FeatureState
   if($state -eq 'Enabled'){
     if(Test-NetFx3Runtime){$result.NetFx3Provisioning.Status='Already available';$result.NetFx3Provisioning.RuntimeVerified=$true;return}
@@ -154,8 +202,14 @@ function Ensure-NetFx3([string]$evidence) {
   $args='/Online /Enable-Feature /FeatureName:NetFx3 /All /NoRestart /English'
   if(-not [string]::IsNullOrWhiteSpace($source)){$args+=' /LimitAccess /Source:"'+$source+'"'}
   $result.NetFx3Provisioning.Status='Installing'
-  Write-Checkpoint '.NET 3.5 command-line installation (one attempt)'
+  Write-Checkpoint '.NET 3.5 command-line installation'
   $install=Invoke-NetFx3Command ($env:WINDIR+'\System32\dism.exe') $args 'netfx3-install.txt' 600
+  if($sandboxPlaceholder -and $source -and $build -in @(26100,26200) -and $install.ExitCode -in @(12006,-2147012890,-2145107924)){
+    try {
+      $staged=Add-NetFx3SandboxPackage $source
+      if($null -ne $staged){$install=$staged}
+    } catch {Stop-NetFx3Provisioning 'Provisioning failed' ('Offline .NET 3.5 staging failed: '+$_.Exception.Message)}
+  }
   $result.NetFx3Provisioning.ExitCode=$install.ExitCode
   if($install.ExitCode -eq 3010){Stop-NetFx3Provisioning 'Restart required' 'DISM requested a restart; the installer has not been retried.'}
   if($install.ExitCode -ne 0){Stop-NetFx3Provisioning 'Provisioning failed' ('DISM failed or timed out (exit '+$install.ExitCode+'). Inspect netfx3-install.txt and the Sandbox servicing/source diagnostics. No installer retry was performed.')}

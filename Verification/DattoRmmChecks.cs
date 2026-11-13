@@ -24,7 +24,13 @@ internal static class DattoRmmChecks
         var other=new UninstallEntry{Key=@"HKLM:\SOFTWARE\Other"};check(DattoRmmDeploymentService.BlockReason(source,other,proof,null) is not null,"Datto rejects a secondary product with another identity");
         var rule=proof.DetectionStrategies[0];rule.RegistryPath=@"HKCU:\SOFTWARE\Fixture";check(DattoRmmDeploymentService.BlockReason(source,entry,proof,null) is not null,"Datto rejects measured current-user detection");rule.RegistryPath=@"HKLM:\SOFTWARE\Fixture";
         var args=proof.CombinedSilentArguments;proof.CombinedSilentArguments="/S PASSWORD=private";check(DattoRmmDeploymentService.BlockReason(source,entry,proof,null) is not null,"Datto blocks recognized credential arguments instead of embedding them");proof.CombinedSilentArguments=args;
-        proof.NetFx3Provisioning.Evidence="Requires .NET Framework 3.5";check(DattoRmmDeploymentService.BlockReason(source,entry,proof,null) is not null,"Datto does not assume Sandbox-provisioned prerequisites exist on managed devices");proof.NetFx3Provisioning.Evidence="";
+        proof.NetFx3Provisioning.Evidence = "Requires .NET Framework 3.5";
+        var netFxScripts = DattoRmmDeploymentService.Generate(source, entry, proof, null);
+        check(netFxScripts.Install.StartsWith("$netFx3", StringComparison.Ordinal) &&
+            !netFxScripts.Detection.Contains("$netFx3") && !netFxScripts.Uninstall.Contains("$netFx3"),
+            "Datto exports validated .NET 3.5 packages with a check before installation only");
+        File.WriteAllText(Path.Combine(folder, "NetFx3Component.ps1"), netFxScripts.Component);
+        proof.NetFx3Provisioning.Evidence = "";
         proof.CombinedSilentArguments="/qn TRANSFORMS=custom.mst";check(DattoRmmDeploymentService.BlockReason(source,entry,proof,null) is not null,"Datto does not omit required MSI transforms from a single-file package");proof.CombinedSilentArguments=args;
         proof.DeploymentSource=@"C:\Extracted\different.msi";check(DattoRmmDeploymentService.BlockReason(source,entry,proof,null) is not null,"Datto rejects an extracted payload instead of exporting the wrong source");proof.DeploymentSource=null;
         proof.SelectedSilentStrategy="Recorded InstallShield response file";check(DattoRmmDeploymentService.BlockReason(source,entry,proof,null) is not null,"Datto refuses response-mode changes after a recorded validation");proof.SelectedSilentStrategy=null;

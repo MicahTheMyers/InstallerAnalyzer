@@ -29,15 +29,24 @@ public static class DeploymentIntelligenceService
         void Check(bool ok, string good, string bad, bool error = false)
         { checks.Add((ok ? "✓ " : error ? "✕ " : "! ") + (ok ? good : bad)); if (!ok) { if (error) errors++; else warnings++; } }
 
-        Check(!string.IsNullOrWhiteSpace(install), "Install script generated", "Install script is empty", true);
-        Check(!string.IsNullOrWhiteSpace(detection), "Detection script generated", "Detection script is empty", true);
-        Check(!string.IsNullOrWhiteSpace(uninstall), "Uninstall script generated", "Uninstall script is empty", true);
+        static bool HasScript(string text) => text.Split('\n').Any(line =>
+            !string.IsNullOrWhiteSpace(line) && !line.TrimStart().StartsWith('#'));
+        var hasInstall = HasScript(install);
+        var hasDetection = HasScript(detection);
+        var hasUninstall = HasScript(uninstall);
+        Check(hasInstall, "Install script generated", "Install script unavailable", true);
+        Check(hasDetection, "Detection script generated", "Detection script unavailable", true);
+        Check(hasUninstall, "Uninstall script generated", "Uninstall script unavailable", true);
         var all = install + "\n" + detection + "\n" + uninstall;
         Check(!Regex.IsMatch(all, @"\$InstallerFolder\b", RegexOptions.IgnoreCase), "No dependency on $InstallerFolder", "Generated script references $InstallerFolder, which may not exist in ImmyBot", true);
         Check(!Regex.IsMatch(all, @"(?<!`)\$[A-Za-z_][A-Za-z0-9_]*\s*=\s*['""]?[A-Z]:\\Users\\", RegexOptions.IgnoreCase), "No user-specific absolute paths", "A generated variable contains a user-specific absolute path");
-        Check(!needsIss || install.Contains("setup.iss", StringComparison.OrdinalIgnoreCase), "Install response-file requirement satisfied", "Installer requires setup.iss but install script does not reference it", true);
-        Check(!needsIss || uninstall.Contains("uninstall.iss", StringComparison.OrdinalIgnoreCase), "Uninstall response-file strategy present", "InstallShield package may require uninstall.iss");
-        Check(install.Contains("ExitCode", StringComparison.OrdinalIgnoreCase) || install.Contains("Start-Process", StringComparison.OrdinalIgnoreCase), "Install execution/exit handling present", "Install script has no obvious process/exit handling");
+        if (hasInstall)
+        {
+            Check(!needsIss || install.Contains("setup.iss", StringComparison.OrdinalIgnoreCase), "Install response-file requirement satisfied", "Installer requires setup.iss but install script does not reference it", true);
+            Check(install.Contains("ExitCode", StringComparison.OrdinalIgnoreCase) || install.Contains("Start-Process", StringComparison.OrdinalIgnoreCase), "Install execution/exit handling present", "Install script has no obvious process/exit handling");
+        }
+        if (hasUninstall)
+            Check(!needsIss || uninstall.Contains("uninstall.iss", StringComparison.OrdinalIgnoreCase), "Uninstall response-file strategy present", "InstallShield package may require uninstall.iss");
         Check(sandboxValidated, "Sandbox lifecycle validated", "Sandbox lifecycle has not been validated");
         return new(errors, warnings, checks);
     }
