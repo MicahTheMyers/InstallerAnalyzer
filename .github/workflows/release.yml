@@ -8,6 +8,9 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 jobs:
   build:
@@ -78,6 +81,13 @@ jobs:
           if (-not $iscc) { throw 'Inno Setup compiler (ISCC.exe) was not found.' }
           & $iscc 'Installer\InstallerAnalyzer.iss'
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
+
+      - name: Attest Windows release files
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            InstallerAnalyzer/Release/InstallerAnalyzer-Setup.exe
+            InstallerAnalyzer/Release/InstallerAnalyzer-Portable.exe
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
