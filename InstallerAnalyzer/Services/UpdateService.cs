@@ -198,8 +198,8 @@ public sealed class UpdateService
     private static (Version? Version, string Product) ReadInstallerMetadata(string path)
     {
         var info = FileVersionInfo.GetVersionInfo(path);
-        Version.TryParse(info.FileVersion, out var version);
-        return (version, info.ProductName ?? "");
+        Version.TryParse(info.FileVersion?.Trim(), out var version);
+        return (version, info.ProductName?.TrimEnd() ?? "");
     }
 
     private async Task<HttpResponseMessage> GetDownloadResponseAsync(Uri origin, CancellationToken token)
