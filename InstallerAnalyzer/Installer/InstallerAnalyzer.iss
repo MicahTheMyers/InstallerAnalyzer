@@ -1,5 +1,5 @@
 #define MyAppName "Installer Analyzer for ImmyBot"
-#define MyAppVersion "0.14.5"
+#define MyAppVersion "0.14.22"
 #define MyAppPublisher "InstallerAnalyzer"
 #define MyAppURL "https://github.com/MicahTheMyers/InstallerAnalyzer"
 #define MyAppExeName "InstallerAnalyzer.exe"
@@ -45,3 +45,20 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch Installer Analyzer"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait runasoriginaluser skipifnotsilent; Check: ReopenAfterUpdate
+
+[Code]
+function ReopenAfterUpdate: Boolean;
+var
+  Index: Integer;
+begin
+  Result := False;
+  for Index := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(Index), '/IAREOPEN') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;

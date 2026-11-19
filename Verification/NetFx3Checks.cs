@@ -40,8 +40,9 @@ internal static class NetFx3Checks
         IntelligenceReportService.Enrich(resolved,null,null);
         check(!resolved.Intelligence.Prerequisites.Any(p => p.Capability == "NetFx3" && p.Status == "Required / missing evidence"), "Verified provisioning resolves earlier missing-runtime UI evidence");
         var script = (string)typeof(SandboxIssRecorder).GetField("NetFx3ProvisioningScript", BindingFlags.NonPublic | BindingFlags.Static)!.GetRawConstantValue()!;
+        script = "$IATimeouts = '" + TimeoutSettings.Current.ToJson() + "' | ConvertFrom-Json\n" + script;
         File.WriteAllText(Path.Combine(root,"netfx3-helper.ps1"), script);
-        check(script.Contains("/NoRestart") && script.Contains("'netfx3-install.txt' 600") && script.Contains("$script:NetFx3Attempted"), "NetFx3 servicing has bounded execution and no automatic reboot");
+        check(script.Contains("/NoRestart") && script.Contains("'netfx3-install.txt' $IATimeouts.NetFxInstall") && script.Contains("$script:NetFx3Attempted"), "NetFx3 servicing has bounded execution and no automatic reboot");
         var windows = Path.Combine(root,"fake-windows"); var winsxs = Path.Combine(windows,"WinSxS");
         var component = "x86_microsoft-windows-wpfcorecomp.resources_31bf3856ad364e35_10.0.26100.1_en-us_52e904ed407f5d73";
         Directory.CreateDirectory(Path.Combine(winsxs,component)); Directory.CreateDirectory(Path.Combine(winsxs,"Manifests"));

@@ -153,7 +153,7 @@ if ($Process.ExitCode -notin @(0,1605,3010)) { throw ('Uninstall failed with exi
                     (RequiresPreinstalledNetFx3(proof)
                         ? "\n\nEnable .NET Framework 3.5 on the target before running Install. The component checks Windows for the prerequisite and stops with IA_ERROR if it is missing. Detect and Uninstall do not require this check."
                         : ""));
-                Text("component-settings.json", JsonSerializer.Serialize(new { Name = entry.DisplayName, Target = "Datto RMM", Category = "Applications", ScriptType = "Batch", RunAs = "LocalSystem", PowerShell = "Windows PowerShell 5.1, 64-bit", TimeoutSeconds = proof.ComponentDeployment is null ? 1200 : 2400, InputVariable = new { Name = "IAAction", Type = "Selection", Default = "Detect", Values = new[] { "Detect", "Install", "Uninstall" } }, WarningPostCondition = "IA_REBOOT_REQUIRED=1", SandboxValidated = true, DattoTenantValidated = false, ComponentRecipe = proof.ComponentDeployment?.Recipe, SandboxCompatibility = proof.SandboxCompatibility }, new JsonSerializerOptions { WriteIndented = true }));
+                Text("component-settings.json", JsonSerializer.Serialize(new { Name = entry.DisplayName, Target = "Datto RMM", Category = "Applications", ScriptType = "Batch", RunAs = "LocalSystem", PowerShell = "Windows PowerShell 5.1, 64-bit", TimeoutSeconds = TimeoutSettings.Current.GetSeconds(proof.ComponentDeployment is null ? "Datto" : "DattoGint"), InputVariable = new { Name = "IAAction", Type = "Selection", Default = "Detect", Values = new[] { "Detect", "Install", "Uninstall" } }, WarningPostCondition = "IA_REBOOT_REQUIRED=1", SandboxValidated = true, DattoTenantValidated = false, ComponentRecipe = proof.ComponentDeployment?.Recipe, SandboxCompatibility = proof.SandboxCompatibility }, new JsonSerializerOptions { WriteIndented = true }));
                 var index = 0;
                 foreach (var file in files) { var stream = locks[index++]; stream.Position = 0; using var target = zip.CreateEntry(file.Key, file.Key == InstallerArchive.AttachmentName ? CompressionLevel.NoCompression : CompressionLevel.Optimal).Open(); stream.CopyTo(target); }
             }
@@ -183,7 +183,8 @@ if (-not $netFx3) {
 }
 """;
 
-    public const string Instructions = """
+    public static string Instructions => InstructionsTemplate.Replace("1200-second", TimeoutSettings.Current.GetSeconds("Datto") + "-second", StringComparison.Ordinal);
+    private const string InstructionsTemplate = """
 # Datto RMM deployment component
 
 Extract this ZIP. In Datto RMM > Automation > Components > Create Component:
@@ -206,7 +207,8 @@ https://rmm.datto.com/help/en/Content/3NEWUI/Automation/Components/Scripting.htm
 https://rmm.datto.com/help/en/Content/3NEWUI/Automation/Components/InputVariables.htm
 """;
 
-    public const string GintInstructions = """
+    public static string GintInstructions => GintInstructionsTemplate.Replace("2400 seconds", TimeoutSettings.Current.GetSeconds("DattoGint") + " seconds", StringComparison.Ordinal);
+    private const string GintInstructionsTemplate = """
 
 ## gINT component recipe
 

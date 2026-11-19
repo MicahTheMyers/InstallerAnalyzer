@@ -2,7 +2,8 @@ namespace InstallerAnalyzer.Services;
 
 public static partial class GintDeploymentPlanService
 {
-    public const string RecipeScript = """
+    public static string RecipeScript => "$IAGintTimeouts = '" + TimeoutSettings.Current.ToJson() + "' | ConvertFrom-Json\n" + RecipeTemplate;
+    private const string RecipeTemplate = """
 $script:IAGintReboot=$false
 $script:IAGintClock=[Diagnostics.Stopwatch]::StartNew()
 $script:IAGintLog=Join-Path $env:WINDIR ('Temp\InstallerAnalyzer-gINT-'+[guid]::NewGuid().ToString('N'))
@@ -31,9 +32,9 @@ function Test-IAGintConnection {
     }
     return $false
 }
-function Invoke-IAGintNative([string]$label,[string]$file,[string]$arguments,[int]$seconds=600) {
+function Invoke-IAGintNative([string]$label,[string]$file,[string]$arguments,[int]$seconds=$IAGintTimeouts.GintStep) {
     Write-Host ('IA_STEP='+$label)
-    if($script:IAGintClock.Elapsed.TotalSeconds -ge 1800){throw 'gINT deployment exceeded its thirty-minute execution budget.'}
+    if($script:IAGintClock.Elapsed.TotalSeconds -ge $IAGintTimeouts.GintTotal){throw 'gINT deployment exceeded its configured execution budget.'}
     New-Item -ItemType Directory -Path $script:IAGintLog -Force|Out-Null
     $info=New-Object Diagnostics.ProcessStartInfo
     $info.FileName=$file;$info.Arguments=$arguments;$info.UseShellExecute=$false;$info.CreateNoWindow=$true
@@ -42,10 +43,13 @@ function Invoke-IAGintNative([string]$label,[string]$file,[string]$arguments,[in
     $process=[Diagnostics.Process]::Start($info)
     $stdout=$process.StandardOutput.ReadToEndAsync();$stderr=$process.StandardError.ReadToEndAsync()
     $clock=[Diagnostics.Stopwatch]::StartNew()
+    $progressClock=@{Deadline=(Get-Date).AddSeconds([Math]::Max(0,[Math]::Min($seconds,$IAGintTimeouts.GintTotal-$script:IAGintClock.Elapsed.TotalSeconds)));Waiting=($label -ne 'gINT')}
+    $progressPrerequisite=if($label -ne 'gINT'){[pscustomobject]@{Name=$label}}else{$null}
     try {
         while(-not $process.WaitForExit(1000)){
-            if($clock.Elapsed.TotalSeconds -gt $seconds -or $script:IAGintClock.Elapsed.TotalSeconds -gt 1800){throw ($label+' timed out; inspect any still-running installer before retrying.')}
+            if($clock.Elapsed.TotalSeconds -gt $seconds -or $script:IAGintClock.Elapsed.TotalSeconds -gt $IAGintTimeouts.GintTotal){throw ($label+' timed out; inspect any still-running installer before retrying.')}
             if(Get-Command Set-AnalysisHeartbeat -ErrorAction SilentlyContinue){Set-AnalysisHeartbeat ('component-'+$label)}
+            if(Get-Command Write-TimerProgress -ErrorAction SilentlyContinue){Write-TimerProgress ('Install '+$label) $progressClock $progressPrerequisite}
         }
         [IO.File]::WriteAllText((Join-Path $script:IAGintLog ($label+'.txt')),($stdout.GetAwaiter().GetResult()+$stderr.GetAwaiter().GetResult()))
         $code=$process.ExitCode
@@ -68,7 +72,7 @@ function Initialize-IAGintFeatures {
     $vb=Join-Path $env:WINDIR 'SysWOW64\vbscript.dll'
     $clsid='Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Classes\WOW6432Node\CLSID\{B54F3741-5B07-11CF-A4B0-00AA004A55E8}\InprocServer32'
     if(-not(Test-Path -LiteralPath $vb) -or -not(Test-Path -LiteralPath $clsid)){
-        $null=Invoke-IAGintNative 'VBScript' ($env:WINDIR+'\System32\dism.exe') '/Online /Add-Capability /CapabilityName:VBSCRIPT /NoRestart /English' 600
+        $null=Invoke-IAGintNative 'VBScript' ($env:WINDIR+'\System32\dism.exe') '/Online /Add-Capability /CapabilityName:VBSCRIPT /NoRestart /English' $IAGintTimeouts.GintStep
         if(-not(Test-Path -LiteralPath $vb) -or -not(Test-Path -LiteralPath $clsid)){throw '32-bit VBScript is unavailable. Resolve Windows optional-feature provisioning, then retry.'}
     }
 }

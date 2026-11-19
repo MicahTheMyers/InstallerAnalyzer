@@ -31,7 +31,7 @@ public static class InstallerIdentityService
             if (process is null) return identity;
             var output = process.StandardOutput.ReadToEndAsync();
             var errors = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(12000))
+            if (!process.WaitForExit(TimeoutSettings.Current.GetSeconds("Signature") * 1000))
             {
                 try { process.Kill(true); } catch { }
                 identity.SignatureStatus = "Check timed out";

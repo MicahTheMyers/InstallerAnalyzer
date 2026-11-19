@@ -6,6 +6,8 @@ public static class ImmyBotScriptGenerator
 {
     public static string Generate(AnalysisResult r, string arguments, string appName, InstallAnalysis? proof = null)
     {
+        if (r.Kind == InstallerKind.AutodeskOdis && r.Archive is null)
+            return "# " + AutodeskOdisDeployment.ImageInstructions;
         if (r.Archive is null) return GenerateInstall(r, arguments, appName, proof);
         if (r.Archive.DeploymentBlockReason(proof) is { } reason)
             return "# " + reason;
@@ -220,6 +222,21 @@ if ($versions.Count -eq 1) { $versions[0] }
                 ? Project2007Deployment.Generate(archive, analysis, uninstall: true)
                 : "# Select the application that passed the recorded lifecycle.";
         if (e is null) return "# Run the Sandbox installation analysis to generate an uninstall script.";
+        if (analysis?.DeploymentMechanism == "Autodesk ODIS")
+        {
+            if (analysis.SilentUninstallValidated != true || !string.Equals(e.Key, analysis.PrimaryKey, StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(analysis.UninstallCandidate))
+                return "# Select the Autodesk application that passed the Sandbox lifecycle.";
+            var command = analysis.UninstallCandidate.Replace("'", "''");
+            return $$"""
+$ErrorActionPreference = 'Stop'
+$Command = '{{command}}'
+if ($Command -notmatch '^\s*(?:"([^"]+)"|([^\s"]+))\s+(\S.*)$') { throw 'Invalid Autodesk uninstall command.' }
+$Executable = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
+$Process = Start-Process -FilePath $Executable -ArgumentList $Matches[3] -Wait -PassThru
+if ($Process.ExitCode -notin @(0, 3010)) { throw "Autodesk uninstall returned $($Process.ExitCode)." }
+""";
+        }
         if ((e.Key ?? "").StartsWith("APPX::", StringComparison.OrdinalIgnoreCase))
         {
             var packageName = (e.DisplayName ?? appName).Replace("'", "''");

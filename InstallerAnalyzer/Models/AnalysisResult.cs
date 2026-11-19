@@ -1,6 +1,6 @@
 using System.IO;
 namespace InstallerAnalyzer.Models;
-public enum InstallerKind { Unknown, Msi, Msix, InstallShield, InnoSetup, Nsis, WixBurn, Squirrel, NvidiaSfx, QSetup, Bootstrapper }
+public enum InstallerKind { Unknown, Msi, Msix, InstallShield, InnoSetup, Nsis, WixBurn, Squirrel, NvidiaSfx, QSetup, Bootstrapper, AutodeskOdis }
 public sealed class AnalysisResult
 {
     public InstallerIdentity Identity { get; set; } = new();

@@ -2,6 +2,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using InstallerAnalyzer.Models;
 
 namespace InstallerAnalyzer.Services;
@@ -13,7 +14,7 @@ public static class DiagnosticBundleService
     private static readonly HashSet<string> Allowed = new(StringComparer.OrdinalIgnoreCase)
     {
         "install-analysis.json", "install-analysis.checkpoint.json", "regression-result.json",
-        "analysis-debug.jsonl", "analysis-heartbeat.txt", "msi-install.log", "msi-uninstall-initial.log", "msi-uninstall-final.log",
+        "analysis-debug.jsonl", "analysis-heartbeat.txt", "analysis-progress.json", "timeout-settings.json", "sandbox-script.json", "msi-install.log", "msi-uninstall-initial.log", "msi-uninstall-final.log",
         "iss-install-replay.log", "iss-uninstall-replay.log",
         "component-deployment.json", "sandbox-compatibility.json", "sandbox-compatibility-refresh.txt", "sandbox-host-startup.json", "sandbox-guest-startup.json", "sandbox-guest-startup-error.txt",
         "app-control-evidence.json",
@@ -21,7 +22,19 @@ public static class DiagnosticBundleService
         "strategy-attempts.json", "prerequisite-results.json", "relationship-graph.json", "detection-strategies.json",
         "component-evidence.json", "network-evidence.json", "payload-file-activity.json", "bits-file-mappings.json", "bits-download-evidence.json", "analysis-summary.json", "prerequisite-probes.json", "prerequisite-files.json", "dll-file-observations.json", "msi-condition-observations.json", "msi-property-observations.json", "prerequisite-services.json", "runtime-environment.json", "bundled-products.json", "installer-ui-text.json"
     };
-    public static DiagnosticBundleResult Export(string destination, IEnumerable<RegressionTestRecord> selected, bool includeScreenshots = false)
+    public static DiagnosticBundleResult Export(string destination, IEnumerable<RegressionTestRecord> selected, bool includeScreenshots = false, string? contextJson = null)
+    {
+        var temporary = Path.GetFullPath(destination) + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            var result = WriteArchive(temporary, selected, includeScreenshots, contextJson);
+            File.Move(temporary, destination, true);
+            return result;
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
+    private static DiagnosticBundleResult WriteArchive(string destination, IEnumerable<RegressionTestRecord> selected, bool includeScreenshots, string? contextJson)
     {
         var records = selected.ToArray();
         int included = 0, omitted = 0; long bytes = 0;
@@ -41,7 +54,7 @@ public static class DiagnosticBundleService
                     var name = Path.GetFileName(file);
                     var screenshot = includeScreenshots && Path.GetExtension(name).Equals(".png", StringComparison.OrdinalIgnoreCase) &&
                         Path.GetRelativePath(record.ArtifactFolder, file).Split(Path.DirectorySeparatorChar).Any(p => p.Equals("screenshots", StringComparison.OrdinalIgnoreCase));
-                    if (!Allowed.Contains(name) && !screenshot) continue;
+                    if (!IsDiagnosticFile(name) && !screenshot) continue;
                     try
                     {
                         var info = new FileInfo(file);
@@ -53,13 +66,18 @@ public static class DiagnosticBundleService
                             var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
                             using var output = entry.Open(); using var input = File.OpenRead(file); input.CopyTo(output);
                         }
-                        else Write(archive, entryName, AiDiagnosticContext.Redact(File.ReadAllText(file)));
+                        else Write(archive, entryName, AiDiagnosticContext.Redact(AnalysisArtifactReader.ReadText(file, 2 * 1024 * 1024)));
                         paths.Add(entryName); included++; bytes += info.Length;
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                     { warnings.Add(name + " could not be read."); omitted++; }
                 }
             manifest.Add(new { Test = record.Installer, record.Result, Files = paths, Warnings = warnings });
+        }
+        if (contextJson is not null)
+        {
+            Write(archive, "troubleshooting-context.json", RedactContext(JsonNode.Parse(contextJson))!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            included++;
         }
         Write(archive, "manifest.json", JsonSerializer.Serialize(new
         {
@@ -69,6 +87,27 @@ public static class DiagnosticBundleService
             Tests = manifest
         }, new JsonSerializerOptions { WriteIndented = true }));
         return new(included, omitted);
+    }
+    private static bool IsDiagnosticFile(string name)
+    {
+        if (Allowed.Contains(name)) return true;
+        var extension = Path.GetExtension(name);
+        return (extension.Equals(".txt", StringComparison.OrdinalIgnoreCase) ||
+                extension.Equals(".json", StringComparison.OrdinalIgnoreCase) ||
+                extension.Equals(".log", StringComparison.OrdinalIgnoreCase)) &&
+            (name.StartsWith("netfx3-", StringComparison.OrdinalIgnoreCase) ||
+             name.StartsWith("bootstrapper-", StringComparison.OrdinalIgnoreCase) ||
+             name.StartsWith("gint-", StringComparison.OrdinalIgnoreCase));
+    }
+    private static JsonNode? RedactContext(JsonNode? node)
+    {
+        if (node is JsonObject item)
+            return new JsonObject(item.Select(pair => new KeyValuePair<string, JsonNode?>(pair.Key, RedactContext(pair.Value))));
+        if (node is JsonArray array)
+            return new JsonArray(array.Select(RedactContext).ToArray());
+        if (node is JsonValue value && value.TryGetValue<string>(out var text))
+            return JsonValue.Create(AiDiagnosticContext.Redact(text));
+        return node?.DeepClone();
     }
     private static IEnumerable<string> Walk(string root)
     {

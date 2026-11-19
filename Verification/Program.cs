@@ -27,16 +27,27 @@ internal static class Program
     {
         var root = Path.GetFullPath(args[0]);
         Directory.CreateDirectory(root);
-        if (args.Length >= 2 && args[1] == "--built-in-catalog")
+        if (args.Length >= 2 && args[1] == "--editor-live") return SandboxScriptEditorChecks.Live(root);
+        if (args.Length == 1)
         {
-            var read = typeof(MainWindow).GetMethod("ReadBuiltInCatalogFile", BindingFlags.NonPublic | BindingFlags.Static)!;
-            var address = ((string)read.Invoke(null, new object[] { "catalog-server.txt" })!).Trim();
-            var publicKey = (string)read.Invoke(null, new object[] { "catalog-signing-public.pem" })!;
-            using var key = System.Security.Cryptography.ECDsa.Create();
-            key.ImportFromPem(publicKey);
-            Check(Uri.TryCreate(address, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps &&
-                publicKey.Contains("-----BEGIN PUBLIC KEY-----", StringComparison.Ordinal), "Build embeds an HTTPS catalog address and a valid public signing key");
-            return 0;
+            const string odisArguments = "-i deploy --offline_mode -q -o \"Collection.xml\" --installer_version \"1.39.0.174\"";
+            const string odisProduct = "Autodesk Civil 3D 2027";
+            var image = new InstallerArchive("deployment.zip", @"Civil3D\image\Installer.exe", "");
+            Check(AutodeskOdisDeployment.GetImageManifest(image, odisArguments, odisProduct) == "Collection.xml",
+                "Autodesk ODIS accepts the offline deployment command with a sibling manifest");
+            foreach (var (archive, arguments, product) in new (InstallerArchive?, string, string)[]
+            {
+                (null, odisArguments, odisProduct),
+                (image, "-q", odisProduct),
+                (image, odisArguments.Replace("Collection.xml", @"C:\Deploy\Collection.xml"), odisProduct),
+                (image, odisArguments, "Autodesk ODIS")
+            })
+            {
+                var rejected = false;
+                try { AutodeskOdisDeployment.GetImageManifest(archive, arguments, product); }
+                catch (InvalidOperationException) { rejected = true; }
+                Check(rejected, "Autodesk ODIS rejects an incomplete or nonportable deployment configuration");
+            }
         }
         if(args.Length>=4 && args[1]=="--recording-catalog-check") return RecordingCatalogChecks.Run(root,args[2],args[3],false);
         if(args.Length>=4 && args[1]=="--recover-recording-catalog") return RecordingCatalogChecks.Run(root,args[2],args[3],true);
@@ -250,6 +261,13 @@ internal static class Program
             BentleyTargetUiChecks.Run(window, Check);
             AppControlChildChecks.Run(Check);
             DattoRmmChecks.Run(window, root, Check);
+            TimeoutSettingsChecks.Run(window, root, Check);
+            InstallerUsabilityChecks.Run(window, root, Check);
+            SandboxTroubleshootingChecks.Run(window, root, Check);
+            SandboxScriptEditorChecks.Run(window, root, Check);
+            AiSettingsContextChecks.Run(root, Check);
+            EditorScrollbarChecks.Run(window, root, Check);
+            NormalRunAiChecks.Run(window, root, Check);
             window.Close();
             Console.WriteLine($"RESULT: {passed} passed, 0 failed");
             return 0;

@@ -2,6 +2,8 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:models="clr-namespace:InstallerAnalyzer.Models"
+        xmlns:local="clr-namespace:InstallerAnalyzer"
         Title="Installer Analyzer for ImmyBot" Height="900" Width="1240" MinHeight="760" MinWidth="1060"
         WindowStyle="None" ResizeMode="CanResize" Background="{DynamicResource Bg}"
         AllowDrop="True" Drop="Window_Drop" DragOver="Window_DragOver">
@@ -10,6 +12,39 @@
   </shell:WindowChrome.WindowChrome>
 
   <Window.Resources>
+    <Style x:Key="TimeoutSlider" TargetType="Slider">
+      <Setter Property="Height" Value="30"/>
+      <Setter Property="IsSnapToTickEnabled" Value="True"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Slider">
+            <Grid Background="{TemplateBinding Background}">
+              <Track x:Name="PART_Track" Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}" Value="{TemplateBinding Value}">
+                <Track.DecreaseRepeatButton>
+                  <RepeatButton Command="{x:Static Slider.DecreaseLarge}" Focusable="False">
+                    <RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Height="5" CornerRadius="2" Background="{DynamicResource Accent}"/></ControlTemplate></RepeatButton.Template>
+                  </RepeatButton>
+                </Track.DecreaseRepeatButton>
+                <Track.Thumb>
+                  <Thumb Width="18" Height="18">
+                    <Thumb.Template><ControlTemplate TargetType="Thumb"><Border Background="{DynamicResource Text}" BorderBrush="{DynamicResource InputBorder}" BorderThickness="2" CornerRadius="9"/></ControlTemplate></Thumb.Template>
+                  </Thumb>
+                </Track.Thumb>
+                <Track.IncreaseRepeatButton>
+                  <RepeatButton Command="{x:Static Slider.IncreaseLarge}" Focusable="False">
+                    <RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Height="5" CornerRadius="2" Background="{DynamicResource InputBorder}"/></ControlTemplate></RepeatButton.Template>
+                  </RepeatButton>
+                </Track.IncreaseRepeatButton>
+              </Track>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter Property="Background" Value="{DynamicResource AccentSoft}"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
     <SolidColorBrush x:Key="Bg" Color="#08111F"/><SolidColorBrush x:Key="Sidebar" Color="#0B1626"/>
     <SolidColorBrush x:Key="Card" Color="#101C2B"/><SolidColorBrush x:Key="Border" Color="#22354B"/>
     <SolidColorBrush x:Key="Text" Color="#F4F7FB"/><SolidColorBrush x:Key="Muted" Color="#A7B4C7"/>
@@ -95,7 +130,7 @@
                      Value="{TemplateBinding Value}"
                      ViewportSize="{TemplateBinding ViewportSize}"
                      Orientation="{TemplateBinding Orientation}"
-                     IsDirectionReversed="True"
+                     IsDirectionReversed="False"
                      Focusable="False">
                 <Track.DecreaseRepeatButton>
                   <RepeatButton x:Name="DecreaseButton" Background="Transparent" BorderThickness="0" Focusable="False" Opacity="0"/>
@@ -124,24 +159,73 @@
             </Grid>
             <ControlTemplate.Triggers>
               <Trigger Property="Orientation" Value="Vertical">
+                <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="True"/>
                 <Setter Property="Width" Value="14"/>
                 <Setter Property="Height" Value="Auto"/>
-                <Setter TargetName="DecreaseButton" Property="Command" Value="ScrollBar.PageUpCommand"/>
-                <Setter TargetName="IncreaseButton" Property="Command" Value="ScrollBar.PageDownCommand"/>
-                <Setter TargetName="ScrollThumb" Property="MinHeight" Value="54"/>
+                <Setter TargetName="DecreaseButton" Property="Command" Value="{x:Static ScrollBar.PageUpCommand}"/>
+                <Setter TargetName="IncreaseButton" Property="Command" Value="{x:Static ScrollBar.PageDownCommand}"/>
+                <Setter TargetName="ScrollThumb" Property="MinHeight" Value="24"/>
                 <Setter TargetName="ScrollThumb" Property="MinWidth" Value="14"/>
               </Trigger>
               <Trigger Property="Orientation" Value="Horizontal">
                 <Setter Property="Height" Value="14"/>
                 <Setter Property="Width" Value="Auto"/>
-                <Setter TargetName="DecreaseButton" Property="Command" Value="ScrollBar.PageLeftCommand"/>
-                <Setter TargetName="IncreaseButton" Property="Command" Value="ScrollBar.PageRightCommand"/>
-                <Setter TargetName="ScrollThumb" Property="MinWidth" Value="54"/>
+                <Setter TargetName="DecreaseButton" Property="Command" Value="{x:Static ScrollBar.PageLeftCommand}"/>
+                <Setter TargetName="IncreaseButton" Property="Command" Value="{x:Static ScrollBar.PageRightCommand}"/>
+                <Setter TargetName="ScrollThumb" Property="MinWidth" Value="24"/>
                 <Setter TargetName="ScrollThumb" Property="MinHeight" Value="14"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter Property="Opacity" Value="0.45"/>
               </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="EditorScrollViewer" TargetType="ScrollViewer">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ScrollViewer">
+            <Grid Background="{TemplateBinding Background}" ClipToBounds="True">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+              <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+              <ScrollContentPresenter x:Name="PART_ScrollContentPresenter" Grid.Row="0" Grid.Column="0"
+                                      Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"
+                                      CanContentScroll="{TemplateBinding CanContentScroll}" Margin="{TemplateBinding Padding}"
+                                      ClipToBounds="True"/>
+              <ScrollBar x:Name="PART_VerticalScrollBar" Grid.Row="0" Grid.Column="1" Orientation="Vertical"
+                         Style="{StaticResource {x:Type ScrollBar}}" Minimum="0" Maximum="{TemplateBinding ScrollableHeight}"
+                         ViewportSize="{TemplateBinding ViewportHeight}"
+                         Value="{Binding VerticalOffset, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"
+                         Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}"/>
+              <ScrollBar x:Name="PART_HorizontalScrollBar" Grid.Row="1" Grid.Column="0" Orientation="Horizontal"
+                         Style="{StaticResource {x:Type ScrollBar}}" Minimum="0" Maximum="{TemplateBinding ScrollableWidth}"
+                         ViewportSize="{TemplateBinding ViewportWidth}"
+                         Value="{Binding HorizontalOffset, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"
+                         Visibility="{TemplateBinding ComputedHorizontalScrollBarVisibility}"/>
+              <Border x:Name="ScrollCorner" Grid.Row="1" Grid.Column="1" Background="{DynamicResource ScrollTrackBg}"/>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="SandboxEditorTextBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="VerticalContentAlignment" Value="Top"/>
+      <Setter Property="CaretBrush" Value="{DynamicResource Text}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TextBox">
+            <Border x:Name="EditorBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="5" ClipToBounds="True">
+              <ScrollViewer x:Name="PART_ContentHost" Style="{StaticResource EditorScrollViewer}" Focusable="False"
+                            Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}"
+                            HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                            VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="EditorBorder" Property="BorderBrush" Value="{DynamicResource Accent}"/></Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
         </Setter.Value>
@@ -223,39 +307,6 @@
       <Grid Grid.Row="0" Background="{DynamicResource Sidebar}" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
         <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="48"/><ColumnDefinition Width="48"/><ColumnDefinition Width="48"/></Grid.ColumnDefinitions>
         <DockPanel VerticalAlignment="Center" Margin="14,0,8,0"><Image Source="Assets/logo.png" Width="25" Height="25" Margin="0,0,9,0"/><TextBlock Text="Installer Analyzer for ImmyBot" TextTrimming="CharacterEllipsis" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/></DockPanel>
-        <Button Grid.Column="1" x:Name="CatalogProfileButton" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,8,0"
-                Click="CatalogProfile_Click" shell:WindowChrome.IsHitTestVisibleInChrome="True"
-                AutomationProperties.Name="Profile" ToolTip="Catalog profile">
-          <StackPanel Orientation="Horizontal">
-            <Path x:Name="CatalogProfileIcon" Width="18" Height="18" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,6,0"
-                  Stroke="{DynamicResource Text}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                  Data="M12,4 A3.5,3.5 0 1 1 12,11 A3.5,3.5 0 1 1 12,4 M5,20 V18 A4,4 0 0 1 9,14 H15 A4,4 0 0 1 19,18 V20 Z"/>
-            <Ellipse x:Name="CatalogProfileAvatar" Width="18" Height="18" Margin="0,0,6,0" VerticalAlignment="Center" Visibility="Collapsed">
-              <Ellipse.Fill><ImageBrush x:Name="CatalogProfileAvatarImage" Stretch="UniformToFill"/></Ellipse.Fill>
-            </Ellipse>
-            <TextBlock x:Name="CatalogProfileLabel" Text="Profile" MaxWidth="180" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
-          </StackPanel>
-        </Button>
-        <Popup x:Name="CatalogProfilePopup" PlacementTarget="{Binding ElementName=CatalogProfileButton}" Placement="Custom"
-               StaysOpen="False" AllowsTransparency="True" Opened="CatalogProfile_Opened">
-              <Border Style="{StaticResource CardStyle}" Width="360" KeyboardNavigation.TabNavigation="Cycle" PreviewKeyDown="CatalogProfile_PreviewKeyDown">
-                <StackPanel>
-                  <TextBlock Text="Profile" FontSize="18" FontWeight="SemiBold"/>
-                  <TextBlock x:Name="CatalogAccountStatus" Text="Sign in with your invited GitHub account to use catalog sync." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,6,0,8"/>
-                  <WrapPanel>
-                    <Button x:Name="CatalogSignInButton" Content="Sign in with GitHub" Style="{StaticResource PrimaryButton}" Click="CatalogSignIn_Click" Margin="0,0,8,4"/>
-                    <Button x:Name="CatalogSignOutButton" Content="Sign out" Click="CatalogSignOut_Click" Visibility="Collapsed" Margin="0,0,8,4"/>
-                    <Button x:Name="CatalogCancelSignInButton" Content="Cancel sign-in" Click="CatalogCancelSignIn_Click" Visibility="Collapsed" Margin="0,0,8,4"/>
-                    <Button x:Name="CatalogOpenGitHubButton" Content="Open GitHub" Click="CatalogOpenGitHub_Click" Visibility="Collapsed" Margin="0,0,8,4"/>
-                  </WrapPanel>
-                  <StackPanel x:Name="CatalogDeviceCodeRow" Orientation="Horizontal" Visibility="Collapsed" Margin="0,6,0,0">
-                    <TextBox x:Name="CatalogDeviceCode" IsReadOnly="True" Width="150" Margin="0,0,8,0"
-                             AutomationProperties.Name="GitHub device code"/>
-                    <Button Content="Copy" Click="CatalogCopyDeviceCode_Click" AutomationProperties.Name="Copy GitHub device code"/>
-                  </StackPanel>
-                </StackPanel>
-              </Border>
-        </Popup>
         <Button Grid.Column="2" Content="—" Background="Transparent" BorderBrush="Transparent" Click="Minimize_Click" shell:WindowChrome.IsHitTestVisibleInChrome="True"/><Button Grid.Column="3" Content="□" Background="Transparent" BorderBrush="Transparent" Click="Maximize_Click" shell:WindowChrome.IsHitTestVisibleInChrome="True"/><Button Grid.Column="4" Content="×" FontSize="18" Background="Transparent" BorderBrush="Transparent" Click="Close_Click" shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
       </Grid>
 
@@ -271,15 +322,6 @@
           <Separator Margin="14,10" Background="{DynamicResource Border}"/>
           <Button x:Name="SettingsNavButton" Style="{StaticResource NavButton}" Click="SettingsNav_Click"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Viewbox Width="24" Height="24" HorizontalAlignment="Center" VerticalAlignment="Center"><Canvas Width="24" Height="24"><Path Stroke="{DynamicResource Text}" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="M9.5,2 L14.5,2 L15,5 L16.5,5.9 L19.3,4.9 L21.8,9.2 L19.5,11.2 L19.5,12.8 L21.8,14.8 L19.3,19.1 L16.5,18.1 L15,19 L14.5,22 L9.5,22 L9,19 L7.5,18.1 L4.7,19.1 L2.2,14.8 L4.5,12.8 L4.5,11.2 L2.2,9.2 L4.7,4.9 L7.5,5.9 L9,5 Z M16,12 A4,4 0 1 1 8,12 A4,4 0 1 1 16,12"/></Canvas></Viewbox><TextBlock Grid.Column="1" Text="Settings" VerticalAlignment="Center" Margin="10,0,0,0"/></Grid></Button>
           <Button x:Name="AboutNavButton" Style="{StaticResource NavButton}" Click="AboutNav_Click"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Viewbox Width="24" Height="24" HorizontalAlignment="Center" VerticalAlignment="Center"><Canvas Width="24" Height="24"><Path Stroke="{DynamicResource Text}" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="M22,12 A10,10 0 1 1 2,12 A10,10 0 1 1 22,12 M12,11 L12,17 M12,7 L12,7.2"/></Canvas></Viewbox><TextBlock Grid.Column="1" Text="About" VerticalAlignment="Center" Margin="10,0,0,0"/></Grid></Button>
-          <Button x:Name="CatalogAdminNavButton" Style="{StaticResource NavButton}" Click="CatalogAdminNav_Click" Visibility="Collapsed" ToolTip="Admin Control Center">
-            <Grid>
-              <Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-              <Viewbox Width="24" Height="24" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <Canvas Width="24" Height="24"><Path Stroke="{DynamicResource Text}" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="M12,2 L21,6 L21,12 C21,17 16,21 12,22 C8,21 3,17 3,12 L3,6 Z M8,12 L11,15 L16,9"/></Canvas>
-              </Viewbox>
-              <TextBlock Grid.Column="1" Text="Admin Control Center" TextWrapping="Wrap" VerticalAlignment="Center" Margin="10,0,0,0"/>
-            </Grid>
-          </Button>
         </StackPanel></ScrollViewer></Border>
 
         <Grid x:Name="WorkspacePages" Grid.Column="1">
@@ -287,10 +329,28 @@
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" PreviewMouseWheel="PageScroll_PreviewMouseWheel"><Grid MinHeight="{Binding ActualHeight, ElementName=AnalyzePage}">
             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
             <Grid Margin="0,0,0,16"><Grid.ColumnDefinitions><ColumnDefinition Width="82"/><ColumnDefinition/></Grid.ColumnDefinitions><Image Source="Assets/logo.png" Width="68" Height="68" VerticalAlignment="Center"/><StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="14,0,0,0"><TextBlock Text="Installer Analyzer" FontSize="30" FontWeight="Bold"/><TextBlock Text="Inspect an installer without running it, then generate an ImmyBot PowerShell install script." Foreground="{DynamicResource Muted}" FontSize="14" Margin="0,4,0,0"/></StackPanel></Grid>
-            <Border Grid.Row="1" Style="{StaticResource CardStyle}" Margin="0,0,0,14"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Installer File" FontWeight="SemiBold" Margin="0,0,0,8"/><Border Background="{DynamicResource InputBg}" BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="6" Padding="10,8"><TextBlock x:Name="FileText" Text="Drop an installer or ZIP here" Foreground="{DynamicResource Muted}" TextTrimming="CharacterEllipsis"/></Border></StackPanel><Button Grid.Column="1" Style="{StaticResource InstallerSelectButton}" Content="Select Installer…" Click="Select_Click" Margin="14,25,0,0"/></Grid></Border>
+            <Border Grid.Row="1" Style="{StaticResource CardStyle}" Margin="0,0,0,14"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Installer File" FontWeight="SemiBold" Margin="0,0,0,8"/><Border Background="{DynamicResource InputBg}" BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="6" Padding="10,8"><TextBlock x:Name="FileText" Text="Drop an installer or ZIP here" Foreground="{DynamicResource Muted}" TextTrimming="CharacterEllipsis"/></Border><WrapPanel Margin="0,7,0,0"><TextBlock x:Name="RememberedInstallerText" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="420"/><Button x:Name="ResetInstallerPreferencesButton" Content="Reset settings" Click="ResetInstallerPreferences_Click" Visibility="Collapsed" Padding="8,4" Margin="10,0,0,0"/><Button x:Name="ChangeArchiveInstallerButton" Content="Choose setup…" Click="ChangeArchiveInstaller_Click" Visibility="Collapsed" Padding="8,4" Margin="8,0,0,0"/></WrapPanel></StackPanel><Button Grid.Column="1" Style="{StaticResource InstallerSelectButton}" Content="Select Installer…" Click="Select_Click" Margin="14,25,0,0"/></Grid></Border>
             <Grid Grid.Row="2" Margin="0,0,0,14"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="14"/><ColumnDefinition/></Grid.ColumnDefinitions>
               <Border Style="{StaticResource CardStyle}"><StackPanel><StackPanel Orientation="Horizontal" Margin="0,0,0,14"><Viewbox Width="22" Height="22" VerticalAlignment="Center" Margin="0,0,9,0"><Canvas Width="24" Height="24"><Path Stroke="{DynamicResource Text}" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M2,5 L9,5 M15,5 L22,5 M2,12 L15,12 M21,12 L22,12 M2,19 L4,19 M10,19 L22,19"/><Ellipse Width="6" Height="6" Canvas.Left="9" Canvas.Top="2" Stroke="{DynamicResource Text}" StrokeThickness="1.8"/><Ellipse Width="6" Height="6" Canvas.Left="15" Canvas.Top="9" Stroke="{DynamicResource Text}" StrokeThickness="1.8"/><Ellipse Width="6" Height="6" Canvas.Left="4" Canvas.Top="16" Stroke="{DynamicResource Text}" StrokeThickness="1.8"/></Canvas></Viewbox><TextBlock Text="Analysis" FontSize="15" FontWeight="Bold" VerticalAlignment="Center"/></StackPanel><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="125"/><ColumnDefinition/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="42"/><RowDefinition Height="42"/><RowDefinition Height="42"/><RowDefinition Height="42"/><RowDefinition Height="42"/><RowDefinition Height="42"/></Grid.RowDefinitions>
-                <TextBlock Text="Installer type" VerticalAlignment="Center" Foreground="{DynamicResource Muted}"/><ComboBox x:Name="KindBox" Grid.Column="1" SelectionChanged="KindBox_SelectionChanged" VerticalAlignment="Center" IsEditable="False" Foreground="{DynamicResource Text}" Background="{DynamicResource InputBg}"/>
+                <TextBlock Text="Installer type" VerticalAlignment="Center" Foreground="{DynamicResource Muted}"/>
+                <ComboBox x:Name="KindBox" Grid.Column="1" SelectionChanged="KindBox_SelectionChanged" VerticalAlignment="Center" IsEditable="False" Foreground="{DynamicResource Text}" Background="{DynamicResource InputBg}">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate>
+                      <TextBlock>
+                        <TextBlock.Style>
+                          <Style TargetType="TextBlock">
+                            <Setter Property="Text" Value="{Binding}"/>
+                            <Style.Triggers>
+                              <DataTrigger Binding="{Binding}" Value="{x:Static models:InstallerKind.AutodeskOdis}">
+                                <Setter Property="Text" Value="Autodesk ODIS"/>
+                              </DataTrigger>
+                            </Style.Triggers>
+                          </Style>
+                        </TextBlock.Style>
+                      </TextBlock>
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
                 <TextBlock Grid.Row="1" Text="Confidence" VerticalAlignment="Center" Foreground="{DynamicResource Muted}"/><Grid Grid.Row="1" Grid.Column="1" VerticalAlignment="Center"><Grid.ColumnDefinitions><ColumnDefinition Width="50"/><ColumnDefinition/></Grid.ColumnDefinitions><TextBlock x:Name="ConfidenceText" VerticalAlignment="Center"/><ProgressBar Grid.Column="1" x:Name="ConfidenceBar" Height="8" Minimum="0" Maximum="100" Background="#22354B" Foreground="{DynamicResource Accent}" BorderThickness="0"/></Grid>
                 <TextBlock Grid.Row="2" Text="Architecture" VerticalAlignment="Center" Foreground="{DynamicResource Muted}"/><TextBlock x:Name="ArchText" Grid.Row="2" Grid.Column="1" VerticalAlignment="Center"/>
                 <TextBlock Grid.Row="3" Text="Product" VerticalAlignment="Center" Foreground="{DynamicResource Muted}"/><TextBox x:Name="ProductBox" Grid.Row="3" Grid.Column="1" Margin="0,3"/>
@@ -314,14 +374,38 @@
                 </ListBox>
               </StackPanel></Border>
             </Grid>
-            <Border Grid.Row="3" Style="{StaticResource CardStyle}" Padding="0" MinHeight="220"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><StackPanel Margin="14,10,14,6"><TextBlock Margin="0,0,0,8" Text="›_  Generated ImmyBot PowerShell" FontSize="15" FontWeight="Bold" VerticalAlignment="Center" Foreground="{DynamicResource Link}"/><WrapPanel><Button x:Name="InstallTabButton" Content="Install" Click="InstallTab_Click" Margin="0,0,5,0" Padding="12,7"/><Button x:Name="DetectionTabButton" Content="Detection" Click="DetectionTab_Click" Margin="0,0,5,0" Padding="12,7"/><Button x:Name="UninstallTabButton" Content="Uninstall" Click="UninstallTab_Click" Margin="0,0,5,0" Padding="12,7"/><Button Content="Intelligence" Click="IntelligenceTab_Click" Margin="0,0,6,0"/><Button x:Name="ValidationTabButton" Content="Validation" Click="ValidationTab_Click" Margin="0,0,10,0" Padding="12,7"/><Button Content="Copy" Click="Copy_Click" Margin="0,0,8,0" Padding="16,7"/><Button Content="Save .ps1" Click="Save_Click" Padding="16,7"/></WrapPanel></StackPanel><RichTextBox x:Name="ScriptBox" Grid.Row="1" Margin="12,0,12,12" FontFamily="Cascadia Mono, Consolas" FontSize="13" IsReadOnly="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Background="{DynamicResource CodeBg}" Foreground="#DCE7F5" BorderBrush="{DynamicResource Border}" Padding="10" IsDocumentEnabled="True"><FlowDocument PagePadding="0" Background="{DynamicResource CodeBg}"/></RichTextBox></Grid></Border>
+            <Border Grid.Row="3" Style="{StaticResource CardStyle}" Padding="14" MinHeight="380">
+              <Grid>
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                <TextBlock Text="Sandbox PowerShell editor" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource Link}"/>
+                <TextBlock Grid.Row="1" Text="Values marked __NAME__ are supplied from Analyze and Settings at launch. Script edits are saved for this installer." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,6,0,8"/>
+                <StackPanel Grid.Row="2" Margin="0,0,0,8">
+                  <WrapPanel x:Name="SandboxScriptToolbar" IsEnabled="False">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,12,6" VerticalAlignment="Center">
+                      <TextBlock Text="Use edited script" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                      <ToggleButton x:Name="UseEditedSandboxScript" Style="{StaticResource Switch}" Checked="UseEditedSandboxScript_Changed" Unchecked="UseEditedSandboxScript_Changed" AutomationProperties.Name="Use edited Sandbox script"/>
+                    </StackPanel>
+                    <Button x:Name="SandboxCheckScriptButton" Content="Check syntax" Click="CheckSandboxScript_Click" Margin="0,0,6,6"/>
+                    <Button Content="Import .ps1…" Click="ImportSandboxScript_Click" Margin="0,0,6,6"/>
+                    <Button Content="Save .ps1…" Click="SaveSandboxScriptFile_Click" Margin="0,0,6,6"/>
+                    <Button Content="Restore generated" Click="RestoreSandboxScript_Click" Margin="0,0,0,6"/>
+                  </WrapPanel>
+                  <TextBlock x:Name="SandboxScriptStatus" Text="Select an installer to load its Sandbox script." Foreground="{DynamicResource Muted}" TextWrapping="Wrap"/>
+                </StackPanel>
+                <TextBox x:Name="SandboxScriptEditor" Grid.Row="3" Style="{StaticResource SandboxEditorTextBox}" IsReadOnly="True" AcceptsReturn="True" AcceptsTab="True"
+                         TextChanged="SandboxScriptEditor_Changed" FontFamily="Consolas" FontSize="13" TextWrapping="NoWrap"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Height="340"
+                         Background="{DynamicResource CodeBg}" Foreground="{DynamicResource Text}" BorderBrush="{DynamicResource InputBorder}" Padding="10"
+                         AutomationProperties.Name="Sandbox PowerShell script editor"/>
+              </Grid>
+            </Border>
             </Grid></ScrollViewer>
           </Grid>
 
           <Grid x:Name="SandboxPage" Visibility="Collapsed" Margin="22,18,22,14">
             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
             <Grid Margin="0,0,0,14"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Sandbox Control Center" FontSize="30" FontWeight="Bold"/><TextBlock Text="Monitor, inspect, validate, and package the deployment." Foreground="{DynamicResource Muted}" Margin="0,5,0,0"/></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="Display:" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="0,0,8,0"/><TextBlock x:Name="SandboxModeBadge" Text="Separate Window" FontWeight="SemiBold" Foreground="{DynamicResource Link}" VerticalAlignment="Center"/></StackPanel></Grid>
-            <Border Grid.Row="1" Style="{StaticResource CardStyle}" Margin="0,0,0,14"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock x:Name="SandboxRunStatus" Text="Ready" FontSize="16" FontWeight="SemiBold"/><TextBlock x:Name="SandboxRunDetails" Text="Select an InstallShield installer on the Analyze page, then start Sandbox analysis here." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,5,0,0"/><TextBlock x:Name="SandboxElapsedText" Text="Elapsed: 00:00:00" FontFamily="Consolas" FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource Text}" Margin="0,8,0,0" ToolTip="Elapsed time for this Sandbox analysis, including startup and finalization. The final duration remains visible when the run ends."/></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><Button x:Name="StartSandboxButton" Style="{StaticResource PrimaryButton}" Content="▶  Start Sandbox Analysis" Click="RecordIss_Click" Margin="0,0,8,0"/><Button x:Name="StopSandboxButton" Style="{StaticResource StopButton}" Content="■  Stop Sandbox" Click="StopSandbox_Click" IsEnabled="False" Margin="0,0,8,0"/><Button x:Name="BringSandboxFrontButton" Content="Open Sandbox" Click="BringSandboxFront_Click" IsEnabled="False"/></StackPanel></Grid></Border>
+            <Border Grid.Row="1" Style="{StaticResource CardStyle}" Margin="0,0,0,14"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock x:Name="SandboxRunStatus" Text="Ready" FontSize="16" FontWeight="SemiBold"/><TextBlock x:Name="SandboxRunDetails" Text="Select an InstallShield installer on the Analyze page, then start Sandbox analysis here." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,5,0,0"/><TextBlock x:Name="SandboxElapsedText" Text="Elapsed: 00:00:00" FontFamily="Consolas" FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource Text}" Margin="0,8,0,0" ToolTip="Elapsed time for this Sandbox analysis, including startup and finalization. The final duration remains visible when the run ends."/><TextBlock x:Name="SandboxTimerText" TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,6,10,0" Visibility="Collapsed"/><TextBlock x:Name="SandboxPrerequisiteText" TextWrapping="Wrap" Foreground="{DynamicResource Link}" Margin="0,4,10,0" Visibility="Collapsed"/><TextBlock x:Name="SandboxSessionTimeText" Foreground="{DynamicResource Muted}" Margin="0,4,0,0" Visibility="Collapsed"/></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><Button x:Name="StartSandboxButton" Style="{StaticResource PrimaryButton}" Content="▶  Start Sandbox Analysis" Click="RecordIss_Click" Margin="0,0,8,0"/><Button x:Name="StopSandboxButton" Style="{StaticResource StopButton}" Content="■  Stop Sandbox" Click="StopSandbox_Click" IsEnabled="False" Margin="0,0,8,0"/><Button x:Name="BringSandboxFrontButton" Content="Open Sandbox" Click="BringSandboxFront_Click" IsEnabled="False"/></StackPanel></Grid></Border>
             <Grid Grid.Row="2"><Grid.ColumnDefinitions><ColumnDefinition x:Name="SandboxPreviewColumn" Width="1.35*"/><ColumnDefinition x:Name="SandboxPreviewGapColumn" Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
               <Border x:Name="SandboxPreviewPanel" Grid.Column="0" Style="{StaticResource CardStyle}" Padding="8"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><TextBlock Text="LIVE PREVIEW" Foreground="{DynamicResource Link}" FontWeight="Bold" Margin="8,4,0,10"/><Border Grid.Row="1" x:Name="SandboxDisplayPlaceholder" Background="#050B13" BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="7"><Grid><TextBlock x:Name="SandboxPlaceholderText" Text="Live Sandbox preview appears here in Integrated Viewer mode.&#10;&#10;When user input is required, click Open Sandbox." Foreground="{DynamicResource Muted}" TextAlignment="Center" HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="440"/><Image x:Name="SandboxPreviewImage" Visibility="Collapsed" Stretch="Uniform" SnapsToDevicePixels="True"/></Grid></Border></Grid></Border>
               <ScrollViewer x:Name="SandboxDetailsScroll" Grid.Column="2" VerticalScrollBarVisibility="Auto" PreviewMouseWheel="SandboxInnerScroll_PreviewMouseWheel"><StackPanel>
@@ -335,6 +419,7 @@
                     <ListBox x:Name="SandboxFilesList" PreviewMouseWheel="SandboxInnerScroll_PreviewMouseWheel" BorderThickness="0" Background="Transparent" MinHeight="70" Margin="0,6,0,0"/>
                     <WrapPanel Margin="0,8,0,0">
                       <Button Content="Open Output Folder" Click="OpenIss_Click" x:Name="SandboxOpenOutputButton" IsEnabled="False" Margin="0,0,8,0"/>
+                      <Button Content="Export Troubleshooting ZIP…" Click="ExportSandboxDiagnostics_Click" x:Name="SandboxExportDiagnosticsButton" IsEnabled="{Binding IsEnabled, ElementName=SandboxOpenOutputButton}" Margin="0,0,8,0"/>
                       <Button Content="Load Recording…" Click="LoadSandboxRecording_Click" x:Name="LoadSandboxRecordingButton" Visibility="Collapsed" Margin="0,0,8,0"/>
                       <Button Content="Replay in Fresh Sandbox" Click="ReplaySandboxRecording_Click" x:Name="ReplaySandboxRecordingButton" Style="{StaticResource PrimaryButton}" Visibility="Collapsed"/>
                     </WrapPanel>
@@ -417,204 +502,14 @@
 <Button Content="Remove" Click="CatalogRemove_Click" Margin="0,0,6,6"/><Button Content="Export Catalog" Tag="Export" Click="CatalogTransfer_Click" Margin="0,0,6,6"/>
 <Button Content="Import Catalog" Tag="Import" Click="CatalogTransfer_Click" Margin="0,0,6,6"/><Button Content="Backup" Tag="Backup" Click="CatalogTransfer_Click" Margin="0,0,6,6"/>
 <Button Content="Restore / Merge Backup" Tag="Restore" Click="CatalogTransfer_Click" Margin="0,0,6,6"/>
-<Button x:Name="CatalogApprovedButton" Content="Approved Recipes" Click="CatalogApproved_Click" Visibility="Collapsed" Margin="0,0,6,6"/>
 </WrapPanel></StackPanel>
 <StackPanel Grid.Row="2" Margin="0,0,0,10">
-  <Border x:Name="CatalogSyncPanel" Style="{StaticResource CardStyle}" Visibility="Collapsed" Margin="0,0,0,8">
-    <StackPanel>
-      <TextBlock x:Name="CatalogSyncHint" TextWrapping="Wrap" Margin="0,0,0,6"/>
-      <WrapPanel x:Name="CatalogSyncFields">
-        <TextBox x:Name="CatalogVendorPage" Width="270" MaxLength="500" Margin="0,0,8,4" AutomationProperties.Name="Official vendor page (HTTPS)" ToolTip="Official HTTPS vendor page"/>
-        <Button x:Name="CatalogSyncButton" Content="Sync" Style="{StaticResource PrimaryButton}" Click="CatalogSyncRequest_Click" Margin="0,0,0,4"/>
-      </WrapPanel>
-      <TextBlock x:Name="CatalogRequestStatus" TextWrapping="Wrap" Foreground="{DynamicResource Muted}"/>
-    </StackPanel>
-  </Border>
   <TextBlock x:Name="CatalogStatusText" TextWrapping="Wrap" Foreground="{DynamicResource Muted}"/>
 </StackPanel>
 <Grid Grid.Row="3"><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="3*"/></Grid.ColumnDefinitions>
 <ListBox x:Name="CatalogList" SelectionChanged="CatalogSelection_Changed" HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled"><ListBox.ItemTemplate><DataTemplate><StackPanel Margin="6,10"><TextBlock Text="{Binding Product}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock Text="{Binding Display}" TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,6,0,0"/></StackPanel></DataTemplate></ListBox.ItemTemplate></ListBox>
 <TextBox Grid.Column="2" x:Name="CatalogDetailsText" VerticalContentAlignment="Top" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Text="Select an entry to inspect its strategy and validation history."/>
 </Grid></Grid>
-<Grid x:Name="CatalogAdminPage" Visibility="Collapsed" Margin="22,18">
-  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-  <StackPanel Margin="0,0,0,12">
-    <TextBlock Text="Admin Control Center" FontSize="30" FontWeight="Bold"/>
-    <TextBlock Text="Sync to check for new requests and refresh the approved catalog." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,6,0,8"/>
-    <WrapPanel>
-      <Button x:Name="CatalogAdminSyncButton" Content="Sync" Style="{StaticResource PrimaryButton}" Click="CatalogAdminSync_Click" MinHeight="34" Margin="0,0,8,0"/>
-      <Button x:Name="CatalogAdminApprovedButton" Content="Approved Recipes" Click="CatalogApproved_Click" MinHeight="34"/>
-    </WrapPanel>
-    <TextBlock x:Name="CatalogAdminStatus" Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,8,0,0"/>
-  </StackPanel>
-  <TabControl x:Name="CatalogAdminTabs" Grid.Row="1" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Border}" BorderThickness="1">
-    <TabControl.Template>
-      <ControlTemplate TargetType="TabControl">
-        <Grid KeyboardNavigation.TabNavigation="Local">
-          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-          <StackPanel IsItemsHost="True" Orientation="Horizontal" Margin="0,0,0,6"
-                      KeyboardNavigation.TabIndex="1" KeyboardNavigation.DirectionalNavigation="Cycle"/>
-          <Border Grid.Row="1" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                  BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="10" KeyboardNavigation.TabIndex="2">
-            <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent"/>
-          </Border>
-        </Grid>
-      </ControlTemplate>
-    </TabControl.Template>
-    <TabControl.Resources>
-      <Style TargetType="TabItem">
-        <Setter Property="Foreground" Value="{DynamicResource Text}"/>
-        <Setter Property="Background" Value="{DynamicResource ButtonBg}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource Border}"/>
-        <Setter Property="Padding" Value="12,7"/>
-        <Setter Property="Margin" Value="0,0,8,0"/>
-        <Setter Property="MinWidth" Value="112"/>
-        <Setter Property="MinHeight" Value="34"/>
-        <Setter Property="Template">
-          <Setter.Value>
-            <ControlTemplate TargetType="TabItem">
-              <Border x:Name="HeaderBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                      BorderThickness="1" CornerRadius="6" Padding="{TemplateBinding Padding}">
-                <ContentPresenter ContentSource="Header" TextElement.Foreground="{TemplateBinding Foreground}"
-                                  HorizontalAlignment="Center" VerticalAlignment="Center"/>
-              </Border>
-              <ControlTemplate.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                  <Setter TargetName="HeaderBorder" Property="Background" Value="{DynamicResource ButtonHover}"/>
-                </Trigger>
-                <Trigger Property="IsSelected" Value="True">
-                  <Setter TargetName="HeaderBorder" Property="Background" Value="{DynamicResource AccentSoft}"/>
-                  <Setter TargetName="HeaderBorder" Property="BorderBrush" Value="{DynamicResource Accent}"/>
-                </Trigger>
-                <Trigger Property="IsKeyboardFocused" Value="True">
-                  <Setter TargetName="HeaderBorder" Property="BorderBrush" Value="{DynamicResource Accent}"/>
-                </Trigger>
-                <Trigger Property="IsEnabled" Value="False">
-                  <Setter TargetName="HeaderBorder" Property="Opacity" Value="0.6"/>
-                </Trigger>
-              </ControlTemplate.Triggers>
-            </ControlTemplate>
-          </Setter.Value>
-        </Setter>
-      </Style>
-    </TabControl.Resources>
-    <TabItem Header="Sync Requests">
-      <DockPanel Margin="10">
-        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
-          <TextBlock Text="Select a request to inspect its details. Independently verify the vendor's file, signature, MSI identity, and install and removal behavior before approving." TextWrapping="Wrap"/>
-          <WrapPanel Margin="0,8,0,0">
-            <Button Content="Approve &amp; publish" Tag="publish" Click="CatalogReview_Click" MinHeight="34" Margin="0,0,8,4"/>
-            <Button Content="Reject" Tag="reject" Click="CatalogReview_Click" MinHeight="34" Margin="0,0,8,4"/>
-            <Button Content="Revoke" Tag="revoke" Click="CatalogReview_Click" MinHeight="34" Margin="0,0,0,4"/>
-          </WrapPanel>
-        </StackPanel>
-        <TextBox x:Name="CatalogReviewDetails" DockPanel.Dock="Bottom" Height="150" Margin="0,8,0,0" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"/>
-        <ListBox x:Name="CatalogAdminRequests" SelectionChanged="CatalogReviewSelection_Changed">
-          <ListBox.ItemTemplate><DataTemplate><StackPanel Margin="4">
-            <TextBlock Text="{Binding Recipe.Product}" FontWeight="SemiBold"/>
-            <StackPanel Orientation="Horizontal">
-              <TextBlock Text="{Binding Status}" Margin="0,0,8,0"/>
-              <TextBlock Text="{Binding Recipe.Version}"/>
-            </StackPanel>
-          </StackPanel></DataTemplate></ListBox.ItemTemplate>
-        </ListBox>
-      </DockPanel>
-    </TabItem>
-    <TabItem Header="Invited Users">
-      <DockPanel Margin="10">
-        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
-          <TextBlock Text="Enter the person's GitHub username. Once invited, they can sign in from Profile." TextWrapping="Wrap"/>
-          <WrapPanel Margin="0,8,0,0">
-            <TextBox x:Name="CatalogInviteLogin" Width="220" MinHeight="34" MaxLength="39" AutomationProperties.Name="GitHub username" Margin="0,0,8,4"/>
-            <Button Content="Invite User" Click="CatalogInvite_Click" MinHeight="34" Margin="0,0,8,4"/>
-            <Button Content="Remove selected user" Click="CatalogRemoveMember_Click" MinHeight="34" Margin="0,0,0,4"/>
-          </WrapPanel>
-        </StackPanel>
-        <ListBox x:Name="CatalogAdminMembers" DisplayMemberPath="Login"/>
-      </DockPanel>
-    </TabItem>
-  </TabControl>
-</Grid>
-<Grid x:Name="CatalogApprovedPage" Visibility="Collapsed" Margin="22,18">
-  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-  <StackPanel Margin="0,0,0,12">
-    <TextBlock Text="Approved Recipes" FontSize="30" FontWeight="Bold"/>
-    <TextBlock x:Name="CatalogApprovedStatus" TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,6,0,8"/>
-    <WrapPanel x:Name="CatalogApprovedActions">
-      <Button Content="Refresh approved list" Click="CatalogApprovedRefresh_Click" Margin="0,0,8,4"/>
-      <Button Content="Verify local MSI" Click="CatalogVerify_Click" Margin="0,0,0,4"/>
-    </WrapPanel>
-  </StackPanel>
-  <DataGrid x:Name="CatalogApprovedList" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
-            Background="{DynamicResource Card}" Foreground="{DynamicResource Text}"
-            BorderBrush="{DynamicResource Border}" BorderThickness="1" RowBackground="{DynamicResource InputBg}"
-            HorizontalGridLinesBrush="{DynamicResource Border}" VerticalGridLinesBrush="{DynamicResource Border}"
-            HeadersVisibility="Column">
-    <DataGrid.ColumnHeaderStyle>
-      <Style TargetType="DataGridColumnHeader">
-        <Setter Property="Background" Value="{DynamicResource ButtonBg}"/>
-        <Setter Property="Foreground" Value="{DynamicResource Text}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource Border}"/>
-        <Setter Property="Padding" Value="9,7"/>
-        <Setter Property="FontWeight" Value="SemiBold"/>
-        <Setter Property="Template">
-          <Setter.Value>
-            <ControlTemplate TargetType="DataGridColumnHeader">
-              <Grid>
-                <Border x:Name="HeaderBackground" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                        BorderThickness="0,0,1,1" Padding="{TemplateBinding Padding}">
-                  <StackPanel Orientation="Horizontal">
-                    <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="True"/>
-                    <TextBlock x:Name="SortIndicator" Visibility="Collapsed" Margin="6,0,0,0" VerticalAlignment="Center"
-                               Foreground="{DynamicResource Text}"/>
-                  </StackPanel>
-                </Border>
-                <Thumb x:Name="PART_LeftHeaderGripper" Width="6" HorizontalAlignment="Left" Cursor="SizeWE">
-                  <Thumb.Template><ControlTemplate TargetType="Thumb"><Border Background="Transparent"/></ControlTemplate></Thumb.Template>
-                </Thumb>
-                <Thumb x:Name="PART_RightHeaderGripper" Width="6" HorizontalAlignment="Right" Cursor="SizeWE">
-                  <Thumb.Template><ControlTemplate TargetType="Thumb"><Border Background="Transparent"/></ControlTemplate></Thumb.Template>
-                </Thumb>
-              </Grid>
-              <ControlTemplate.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                  <Setter TargetName="HeaderBackground" Property="Background" Value="{DynamicResource ButtonHover}"/>
-                </Trigger>
-                <Trigger Property="SortDirection" Value="Ascending">
-                  <Setter TargetName="SortIndicator" Property="Visibility" Value="Visible"/>
-                  <Setter TargetName="SortIndicator" Property="Text" Value="▲"/>
-                </Trigger>
-                <Trigger Property="SortDirection" Value="Descending">
-                  <Setter TargetName="SortIndicator" Property="Visibility" Value="Visible"/>
-                  <Setter TargetName="SortIndicator" Property="Text" Value="▼"/>
-                </Trigger>
-              </ControlTemplate.Triggers>
-            </ControlTemplate>
-          </Setter.Value>
-        </Setter>
-      </Style>
-    </DataGrid.ColumnHeaderStyle>
-    <DataGrid.CellStyle>
-      <Style TargetType="DataGridCell">
-        <Setter Property="Foreground" Value="{DynamicResource Text}"/>
-        <Style.Triggers>
-          <Trigger Property="IsSelected" Value="True">
-            <Setter Property="Background" Value="{DynamicResource AccentSoft}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentSoft}"/>
-            <Setter Property="Foreground" Value="{DynamicResource Text}"/>
-          </Trigger>
-        </Style.Triggers>
-      </Style>
-    </DataGrid.CellStyle>
-    <DataGrid.Columns>
-      <DataGridTextColumn Header="Product" Binding="{Binding Product}" Width="*"/>
-      <DataGridTextColumn Header="Version" Binding="{Binding Version}"/>
-      <DataGridTextColumn Header="Publisher" Binding="{Binding Publisher}"/>
-      <DataGridTextColumn Header="Vendor page" Binding="{Binding VendorPage}"/>
-      <DataGridTextColumn Header="SHA-256" Binding="{Binding Sha256}"/>
-    </DataGrid.Columns>
-  </DataGrid>
-</Grid>
 <Grid x:Name="SettingsPage" Visibility="Collapsed" Margin="34,28"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><TextBlock Text="Settings" FontSize="30" FontWeight="Bold"/><TextBlock Grid.Row="1" Text="Appearance and Windows integration options" Foreground="{DynamicResource Muted}" Margin="0,5,0,20"/><ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CanContentScroll="False" PanningMode="VerticalOnly" Padding="0,0,10,20"><StackPanel MaxWidth="760" HorizontalAlignment="Left">
             <Border Style="{StaticResource CardStyle}" Margin="0,0,0,14"><StackPanel Width="690"><TextBlock Text="Appearance" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Choose a dark, super dark, light, full purple, or classic hacker interface and an accent color. Your selection is saved automatically." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,8,0,16"/><TextBlock Text="Theme" FontWeight="SemiBold" Margin="0,0,0,8"/><WrapPanel><RadioButton x:Name="DarkThemeRadio" Style="{StaticResource SegmentRadio}" Content="Dark" GroupName="AppTheme" Checked="Appearance_Changed" Width="158" Margin="0,0,10,10"/><RadioButton x:Name="SuperDarkThemeRadio" Style="{StaticResource SegmentRadio}" Content="Super Dark" GroupName="AppTheme" Checked="Appearance_Changed" Width="158" Margin="0,0,10,10"/><RadioButton x:Name="LightThemeRadio" Style="{StaticResource SegmentRadio}" Content="Light" GroupName="AppTheme" Checked="Appearance_Changed" Width="158" Margin="0,0,10,10"/><RadioButton x:Name="PurpleThemeRadio" Style="{StaticResource SegmentRadio}" Content="Purple" GroupName="AppTheme" Checked="Appearance_Changed" Width="158" Margin="0,0,10,10"/><RadioButton x:Name="HackerThemeRadio" Style="{StaticResource SegmentRadio}" Content="Hacker" GroupName="AppTheme" Checked="Appearance_Changed" Width="158" Margin="0,0,10,10"/><RadioButton x:Name="CustomThemeRadio" Style="{StaticResource SegmentRadio}" Content="Custom" GroupName="AppTheme" Checked="Appearance_Changed" Width="158" Margin="0,0,10,10"/></WrapPanel><Button Content="Custom theme color…" Click="CustomTheme_Click" HorizontalAlignment="Left" Margin="0,4,0,8"/><TextBlock Text="Accent color" FontWeight="SemiBold" Margin="0,18,0,8"/><WrapPanel><RadioButton x:Name="BlueAccentRadio" Style="{StaticResource AccentRadio}" Content="Blue" GroupName="AccentColor" Checked="Appearance_Changed" Margin="0,0,18,8"/><RadioButton x:Name="PurpleAccentRadio" Style="{StaticResource AccentRadio}" Content="Purple" GroupName="AccentColor" Checked="Appearance_Changed" Margin="0,0,18,8"/><RadioButton x:Name="TealAccentRadio" Style="{StaticResource AccentRadio}" Content="Teal" GroupName="AccentColor" Checked="Appearance_Changed" Margin="0,0,18,8"/><RadioButton x:Name="OrangeAccentRadio" Style="{StaticResource AccentRadio}" Content="Orange" GroupName="AccentColor" Checked="Appearance_Changed" Margin="0,0,18,8"/><RadioButton x:Name="RedAccentRadio" Style="{StaticResource AccentRadio}" Content="Red" GroupName="AccentColor" Checked="Appearance_Changed" Margin="0,0,18,8"/><RadioButton x:Name="GreenAccentRadio" Style="{StaticResource AccentRadio}" Content="Green" GroupName="AccentColor" Checked="Appearance_Changed" Margin="0,0,18,8"/><RadioButton x:Name="PinkAccentRadio" Style="{StaticResource AccentRadio}" Content="Pink" GroupName="AccentColor" Checked="Appearance_Changed" Margin="0,0,18,8"/><RadioButton x:Name="GoldAccentRadio" Style="{StaticResource AccentRadio}" Content="Gold" GroupName="AccentColor" Checked="Appearance_Changed" Margin="0,0,18,8"/><RadioButton x:Name="CustomAccentRadio" Style="{StaticResource AccentRadio}" Content="Custom" GroupName="AccentColor" Checked="Appearance_Changed" Margin="0,0,18,8"/></WrapPanel><Button Content="Custom accent color…" Click="CustomAccent_Click" HorizontalAlignment="Left" Margin="0,4,0,0"/></StackPanel></Border>
             <Border Style="{StaticResource CardStyle}" Margin="0,0,0,14">
@@ -630,10 +525,12 @@
               </StackPanel>
             </Border>
             <Border Style="{StaticResource CardStyle}" Margin="0,0,0,14"><StackPanel Width="690"><TextBlock Text="Local installer catalog" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Passed lifecycles are remembered by SHA-256. Exact matches reuse validated arguments and are checked again in Sandbox." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,8,0,12"/><Button Content="View local catalog" Click="ViewCatalog_Click" HorizontalAlignment="Left"/></StackPanel></Border><Border Style="{StaticResource CardStyle}" Margin="0,0,0,14"><StackPanel Width="690"><TextBlock Text="Test Mode" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Enable the regression-testing workspace. When enabled, a Test Mode tab appears in the sidebar. Test Mode uses a dedicated installer folder and keeps results separated from normal analysis." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,8,0,12"/><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Enable Test Mode" FontWeight="SemiBold"/><TextBlock Text="Disabled by default. Existing test results are preserved when the tab is hidden." Foreground="{DynamicResource Muted}" Margin="0,4,20,0" TextWrapping="Wrap"/></StackPanel><ToggleButton x:Name="EnableTestModeToggle" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center" Checked="TestModeSetting_Changed" Unchecked="TestModeSetting_Changed"/></Grid>
-<StackPanel x:Name="AiAssistSettings" Visibility="Collapsed" Margin="0,18,0,0">
-  <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Enable read-only AI Assist" FontWeight="SemiBold"/><TextBlock Text="Off by default. Opens a troubleshooting chat for Test Mode. The assistant can explain diagnostics but cannot execute commands, change files, rerun installers, or edit the catalog." TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,5,20,0"/></StackPanel><ToggleButton x:Name="EnableAiAssistToggle" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center" Checked="AiAssistSetting_Changed" Unchecked="AiAssistSetting_Changed"/></Grid>
+</StackPanel></Border>
+<Border Style="{StaticResource CardStyle}" Margin="0,0,0,14"><StackPanel Width="690"><TextBlock Text="AI Assist" FontSize="18" FontWeight="SemiBold"/>
+<StackPanel x:Name="AiAssistSettings" Margin="0,12,0,0">
+  <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Enable read-only AI Assist" FontWeight="SemiBold"/><TextBlock Text="Ask about installers, normal Sandbox runs, or regression tests. Suggestions are read-only and are sent only when you ask." TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,5,20,0"/></StackPanel><ToggleButton x:Name="EnableAiAssistToggle" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center" Checked="AiAssistSetting_Changed" Unchecked="AiAssistSetting_Changed"/></Grid>
   <StackPanel x:Name="AiConnectionSettings" Visibility="Collapsed" Margin="0,12,0,0">
-    <TextBlock Text="Connection"/><ComboBox x:Name="AiProviderBox" SelectedIndex="0" SelectionChanged="AiProvider_Changed" Margin="0,5,0,8"><ComboBoxItem Content="OpenAI"/><ComboBoxItem Content="Local Ollama"/><ComboBoxItem Content="Claude (Anthropic)"/></ComboBox>
+    <TextBlock Text="Connection"/><ComboBox x:Name="AiProviderBox" SelectedIndex="0" SelectionChanged="AiProvider_Changed" Margin="0,5,0,8"><ComboBoxItem Content="OpenAI"/><ComboBoxItem Content="Local Ollama"/><ComboBoxItem Content="Claude (Anthropic)"/><ComboBoxItem Content="Hatz AI"/></ComboBox>
     <TextBlock Text="Model name"/><TextBox x:Name="AiModelBox" MaxLength="120" LostFocus="AiConfiguration_Changed" Margin="0,5,0,8" ToolTip="Enter an API model ID, or the name of an already installed local model."/>
     <StackPanel x:Name="AiLocalSettings" Visibility="Collapsed"><TextBlock Text="Local server address"/><TextBox x:Name="AiLocalServerBox" Text="http://127.0.0.1:11434" MaxLength="200" LostFocus="AiConfiguration_Changed" Margin="0,5,0,8"/><TextBlock Text="Uses the Ollama chat API on this computer. Choose an installed local model; the app does not install models. Your server's configuration controls any further routing." TextWrapping="Wrap" Foreground="{DynamicResource Muted}"/></StackPanel>
     <StackPanel x:Name="AiCloudSettings"><TextBlock x:Name="AiApiKeyLabel" Text="OpenAI API key"/><PasswordBox x:Name="AiApiKeyBox" MaxLength="1024" Padding="9,7" Margin="0,5,0,5" Foreground="{DynamicResource Text}" Background="{DynamicResource InputBg}" BorderBrush="{DynamicResource Border}"/><StackPanel Orientation="Horizontal"><Button Content="Save key" Click="AiSaveKey_Click" Margin="0,0,6,0"/><Button Content="Remove saved key" Click="AiRemoveKey_Click"/></StackPanel><TextBlock x:Name="AiKeyStatus" TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,5,0,0"/><TextBlock x:Name="AiCloudPrivacyText" Text="OpenAI receives the redacted diagnostic snapshot, your question and recent chat turns only when you send. API usage is billed separately. Saved keys are protected for your Windows account. Review the diagnostic preview before sending; automatic redaction cannot identify every possible secret." TextWrapping="Wrap" Foreground="{DynamicResource Muted}" Margin="0,8,0,0"/></StackPanel>
@@ -665,7 +562,7 @@
                                 AutomationProperties.LabeledBy="{Binding ElementName=PrepareNetFx3Label}"
                                 Checked="AppSetting_Changed" Unchecked="AppSetting_Changed"/>
                 </Grid>
-                <Grid Margin="0,18,0,0">
+                <Grid x:Name="SandboxCompatibilitySettings" Margin="0,18,0,0">
                   <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                   <StackPanel Margin="0,0,20,0">
                     <TextBlock x:Name="SandboxCompatibilityLabel" Text="Legacy installer compatibility" FontWeight="SemiBold"/>
@@ -679,20 +576,58 @@
                 <Button Content="Open Windows Features" Click="OpenWindowsFeatures_Click" HorizontalAlignment="Left" Margin="0,18,0,0"/>
               </StackPanel>
             </Border>
-            <Border Style="{StaticResource CardStyle}" Margin="0,0,0,14"><StackPanel Width="690"><TextBlock Text="Bundled software protection" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Control protection against unwanted software bundled with another installer. When enabled, a lightweight watchdog inside the existing Sandbox user session checks running processes and terminates McAfee components bundled by another installer." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,8,0,12"/><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Block bundled McAfee software" FontWeight="SemiBold"/><TextBlock Text="Enabled by default. The watchdog is automatically skipped when the selected installer is itself a McAfee installer." Foreground="{DynamicResource Muted}" Margin="0,4,20,0" TextWrapping="Wrap"/></StackPanel><ToggleButton x:Name="BlockBundledMcAfeeToggle" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center" IsChecked="True" Checked="AppSetting_Changed" Unchecked="AppSetting_Changed"/></Grid></StackPanel></Border><Border Style="{StaticResource CardStyle}" Margin="0,0,0,14"><StackPanel Width="690"><TextBlock Text="Sandbox completion" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Automatically close Windows Sandbox after Installer Analyzer has copied the final analysis output and lifecycle validation is complete." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,8,0,12"/><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Automatically close Sandbox when analysis completes" FontWeight="SemiBold"/><TextBlock Text="Leave this off when you want to inspect the Sandbox after analysis." Foreground="{DynamicResource Muted}" Margin="0,4,20,0"/></StackPanel><ToggleButton x:Name="AutoCloseSandboxToggle" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center" IsChecked="True" Checked="AppSetting_Changed" Unchecked="AppSetting_Changed"/></Grid></StackPanel></Border><Border Style="{StaticResource CardStyle}" Margin="0,0,0,14"><StackPanel Width="690"><TextBlock Text="Sandbox display mode" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Choose between a live integrated preview of Windows Sandbox or its normal separate window." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,8,0,16"/><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="10"/><ColumnDefinition/></Grid.ColumnDefinitions><RadioButton x:Name="EmbeddedModeRadio" Style="{StaticResource SegmentRadio}" Content="Integrated Viewer" GroupName="SandboxDisplayMode" IsChecked="False" Checked="SandboxDisplayMode_Changed"/><RadioButton x:Name="SeparateModeRadio" Style="{StaticResource SegmentRadio}" Grid.Column="2" Content="Separate Window (Recommended)" GroupName="SandboxDisplayMode" IsChecked="True" Checked="SandboxDisplayMode_Changed"/></Grid><TextBlock Text="Integrated Viewer keeps Windows Sandbox in its supported separate window and displays a live preview here. Use Bring to Front when you need direct mouse or keyboard interaction." Foreground="#E7B75D" TextWrapping="Wrap" Margin="0,14,0,0"/></StackPanel></Border><Border Style="{StaticResource CardStyle}"><StackPanel Width="690"><TextBlock Text="Updates" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Installer Analyzer can check GitHub Releases for new versions. Updates are never installed without your approval." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,8,0,16"/><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Automatically check for updates" FontWeight="SemiBold"/><TextBlock Text="Checks at application startup." Foreground="{DynamicResource Muted}" Margin="0,4,20,0"/></StackPanel><ToggleButton x:Name="AutoUpdateToggle" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center" Checked="AutoUpdateToggle_Changed" Unchecked="AutoUpdateToggle_Changed"/></Grid><Button Content="Check for Updates Now" Click="CheckForUpdates_Click" HorizontalAlignment="Left" Margin="0,18,0,0"/></StackPanel></Border>
+            <Border Style="{StaticResource CardStyle}" Margin="0,0,0,14">
+              <Expander x:Name="TimeoutSettingsExpander" Foreground="{DynamicResource Text}" Width="690">
+                <Expander.Header><TextBlock Text="Timeouts" FontSize="18" FontWeight="SemiBold"/></Expander.Header>
+                <StackPanel Margin="0,14,0,0">
+                  <Grid Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <StackPanel>
+                      <TextBlock Text="Use custom timeouts" FontWeight="SemiBold"/>
+                      <TextBlock Text="Saved automatically. Applies to new runs, requests and exports." Foreground="{DynamicResource Muted}" Margin="0,4,12,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                    <ToggleButton x:Name="CustomTimeoutToggle" Grid.Column="1" Style="{StaticResource Switch}" Checked="TimeoutToggle_Changed" Unchecked="TimeoutToggle_Changed" AutomationProperties.Name="Use custom timeouts"/>
+                  </Grid>
+                  <TextBlock Text="The session and operation limits can end a run before an individual step's timer." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,0,0,14"/>
+                  <ItemsControl x:Name="TimeoutRows" IsEnabled="{Binding IsChecked, ElementName=CustomTimeoutToggle}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Grid Margin="0,0,0,12">
+                          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="110"/></Grid.ColumnDefinitions>
+                          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                          <TextBlock Text="{Binding Definition.Label}" Foreground="{DynamicResource Text}"/>
+                          <TextBlock Grid.Column="1" Text="{Binding Display}" HorizontalAlignment="Right" Foreground="{DynamicResource Link}"/>
+                          <Slider Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource TimeoutSlider}" Margin="0,3,0,0"
+                                  Minimum="{Binding Definition.MinimumSeconds}" Maximum="{Binding Definition.MaximumSeconds}"
+                                  TickFrequency="{Binding Definition.StepSeconds}" SmallChange="{Binding Definition.StepSeconds}" LargeChange="{Binding Definition.StepSeconds}"
+                                  Value="{Binding Seconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="{Binding Definition.Label}"/>
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <Button Content="Reset timeouts to defaults" Click="ResetTimeouts_Click" HorizontalAlignment="Left" Margin="0,5,0,0"/>
+                </StackPanel>
+              </Expander>
+            </Border>
+            <Border Style="{StaticResource CardStyle}" Margin="0,0,0,14"><StackPanel Width="690"><TextBlock Text="Bundled software protection" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Control protection against unwanted software bundled with another installer. When enabled, a lightweight watchdog inside the existing Sandbox user session checks running processes and terminates McAfee components bundled by another installer." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,8,0,12"/><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Block bundled McAfee software" FontWeight="SemiBold"/><TextBlock Text="Enabled by default. The watchdog is automatically skipped when the selected installer is itself a McAfee installer." Foreground="{DynamicResource Muted}" Margin="0,4,20,0" TextWrapping="Wrap"/></StackPanel><ToggleButton x:Name="BlockBundledMcAfeeToggle" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center" IsChecked="True" Checked="AppSetting_Changed" Unchecked="AppSetting_Changed"/></Grid></StackPanel></Border><Border Style="{StaticResource CardStyle}" Margin="0,0,0,14"><StackPanel Width="690"><TextBlock Text="Sandbox completion" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Automatically close Windows Sandbox after Installer Analyzer has copied the final analysis output and lifecycle validation is complete." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,8,0,12"/><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Automatically close Sandbox when analysis completes" FontWeight="SemiBold"/><TextBlock Text="Leave this off when you want to inspect the Sandbox after analysis." Foreground="{DynamicResource Muted}" Margin="0,4,20,0"/></StackPanel><ToggleButton x:Name="AutoCloseSandboxToggle" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center" IsChecked="True" Checked="AppSetting_Changed" Unchecked="AppSetting_Changed"/></Grid></StackPanel></Border><Border Style="{StaticResource CardStyle}" Margin="0,0,0,14"><StackPanel Width="690"><TextBlock Text="Sandbox display mode" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Choose between a live integrated preview of Windows Sandbox or its normal separate window." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,8,0,16"/><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="10"/><ColumnDefinition/></Grid.ColumnDefinitions><RadioButton x:Name="EmbeddedModeRadio" Style="{StaticResource SegmentRadio}" Content="Integrated Viewer" GroupName="SandboxDisplayMode" IsChecked="False" Checked="SandboxDisplayMode_Changed"/><RadioButton x:Name="SeparateModeRadio" Style="{StaticResource SegmentRadio}" Grid.Column="2" Content="Separate Window (Recommended)" GroupName="SandboxDisplayMode" IsChecked="True" Checked="SandboxDisplayMode_Changed"/></Grid><TextBlock Text="Integrated Viewer keeps Windows Sandbox in its supported separate window and displays a live preview here. Use Bring to Front when you need direct mouse or keyboard interaction." Foreground="#E7B75D" TextWrapping="Wrap" Margin="0,14,0,0"/></StackPanel></Border><Border x:Name="GitHubUpdateSettings" Style="{StaticResource CardStyle}"><StackPanel Width="690"><TextBlock Text="Updates" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Installer Analyzer can check GitHub Releases for new versions. Updates are never installed without your approval." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,8,0,16"/><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="Automatically check for updates" FontWeight="SemiBold"/><TextBlock Text="Checks at application startup." Foreground="{DynamicResource Muted}" Margin="0,4,20,0"/></StackPanel><ToggleButton x:Name="AutoUpdateToggle" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center" Checked="AutoUpdateToggle_Changed" Unchecked="AutoUpdateToggle_Changed"/></Grid><Button Content="Check for Updates Now" Click="CheckForUpdates_Click" HorizontalAlignment="Left" Margin="0,18,0,0"/></StackPanel></Border>
           </StackPanel></ScrollViewer></Grid>
 
           <Grid x:Name="AboutPage" Visibility="Collapsed" Margin="34,28"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><TextBlock Text="About" FontSize="30" FontWeight="Bold"/><ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,16,0,0"><StackPanel MaxWidth="620" HorizontalAlignment="Left">
-<Border Style="{StaticResource CardStyle}" Margin="0,0,0,14"><StackPanel Orientation="Horizontal"><Image Source="Assets/logo.png" Width="90" Height="90" Margin="0,0,20,0"/><StackPanel VerticalAlignment="Center"><TextBlock Text="Installer Analyzer for ImmyBot" FontSize="20" FontWeight="Bold"/><TextBlock x:Name="AboutVersionText" Foreground="{DynamicResource Muted}" FontSize="14" Margin="0,7,0,0"/><TextBlock Text="github.com/MicahTheMyers/InstallerAnalyzer" Foreground="{DynamicResource Link}" Margin="0,5,0,0"/></StackPanel></StackPanel></Border><Border Style="{StaticResource CardStyle}"><StackPanel><TextBlock Text="Updates" FontSize="18" FontWeight="SemiBold"/><TextBlock x:Name="UpdateStatusText" Text="Click Check for Updates to query GitHub Releases." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,8,0,14"/><StackPanel Orientation="Horizontal"><Button x:Name="CheckUpdateButton" Content="Check for Updates" Click="CheckForUpdates_Click" Margin="0,0,8,0"/><Button x:Name="InstallUpdateButton" Style="{StaticResource PrimaryButton}" Content="Download &amp; Install Update" Click="InstallUpdate_Click" IsEnabled="False"/></StackPanel><TextBlock x:Name="ReleaseNotesText" Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,14,0,0" MaxHeight="220"/></StackPanel></Border></StackPanel></ScrollViewer></Grid>
+<Border Style="{StaticResource CardStyle}" Margin="0,0,0,14"><StackPanel Orientation="Horizontal"><Image Source="Assets/logo.png" Width="90" Height="90" Margin="0,0,20,0"/><StackPanel VerticalAlignment="Center"><TextBlock Text="Installer Analyzer for ImmyBot" FontSize="20" FontWeight="Bold"/><TextBlock x:Name="AboutVersionText" Foreground="{DynamicResource Muted}" FontSize="14" Margin="0,7,0,0"/><TextBlock Text="github.com/MicahTheMyers/InstallerAnalyzer" Foreground="{DynamicResource Link}" Margin="0,5,0,0"/></StackPanel></StackPanel></Border><Border x:Name="GitHubUpdateAbout" Style="{StaticResource CardStyle}"><StackPanel><TextBlock Text="Updates" FontSize="18" FontWeight="SemiBold"/><TextBlock x:Name="UpdateStatusText" Text="Click Check for Updates to query GitHub Releases." Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,8,0,14"/><StackPanel Orientation="Horizontal"><Button x:Name="CheckUpdateButton" Content="Check for Updates" Click="CheckForUpdates_Click" Margin="0,0,8,0"/><Button x:Name="InstallUpdateButton" Style="{StaticResource PrimaryButton}" Content="Download &amp; Install Update" Click="InstallUpdate_Click" IsEnabled="False"/></StackPanel><TextBlock x:Name="ReleaseNotesText" Foreground="{DynamicResource Muted}" TextWrapping="Wrap" Margin="0,14,0,0" MaxHeight="220"/></StackPanel></Border></StackPanel></ScrollViewer></Grid>
         </Grid>
       </Grid>
 
       <Border x:Name="AiAssistPanel" Grid.Column="1" Visibility="Collapsed" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="8" Margin="8,12,12,12" Padding="12">
         <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
           <StackPanel><TextBlock Text="AI Assist" FontSize="20" FontWeight="Bold"/><TextBlock Text="Read-only • Suggestions only" Foreground="{DynamicResource Link}" Margin="0,3,0,7"/><TextBlock x:Name="AiPrivacyText" TextWrapping="Wrap" Foreground="{DynamicResource Muted}" FontSize="11"/></StackPanel>
-          <Grid Grid.Row="1" Margin="0,8,0,8"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><ComboBox x:Name="AiTestBox" DisplayMemberPath="Label" SelectionChanged="AiTest_Changed" ToolTip="Test whose diagnostics will be included"/><StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,6,0,0"><Button Content="Preview diagnostics" Click="AiPreview_Click" Padding="8,4" Margin="0,0,6,0"/><Button Content="Clear chat" Click="AiClear_Click" Padding="8,4"/></StackPanel></Grid>
-          <ListBox x:Name="AiMessagesList" Grid.Row="2" HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled" Background="{DynamicResource InputBg}" BorderThickness="0" MinHeight="60"><ListBox.ItemTemplate><DataTemplate><StackPanel Margin="2,7"><TextBlock Text="{Binding Role}" Foreground="{DynamicResource Link}" FontWeight="Bold"/><TextBlock Text="{Binding Text}" TextWrapping="Wrap" Margin="0,4,0,0"/></StackPanel></DataTemplate></ListBox.ItemTemplate></ListBox>
-          <TextBox x:Name="AiQuestionBox" Grid.Row="3" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" MaxLength="4000" Height="56" Margin="0,8,0,6" ToolTip="Ask about the selected test. Ctrl+Enter sends." PreviewKeyDown="AiQuestion_KeyDown"/>
+          <StackPanel Grid.Row="1" Margin="0,8,0,8">
+            <ComboBox x:Name="AiTestBox" DisplayMemberPath="Label" SelectionChanged="AiTest_Changed" ToolTip="Installer or run whose diagnostics will be included"/>
+            <CheckBox x:Name="AiIncludeEditorCheck" Content="Include Sandbox editor script" IsEnabled="False" Click="AiIncludeEditor_Click" Margin="0,6,0,0"
+                      ToolTipService.ShowOnDisabled="True" ToolTip="When checked, your selected provider receives the current redacted editor draft on Send or Explain. Use Preview diagnostics to review it."/>
+            <StackPanel Orientation="Horizontal" Margin="0,6,0,0"><Button Content="Preview diagnostics" Click="AiPreview_Click" Padding="8,4" Margin="0,0,6,0"/><Button Content="Clear chat" Click="AiClear_Click" Padding="8,4"/></StackPanel>
+          </StackPanel>
+          <ListBox x:Name="AiMessagesList" Grid.Row="2" HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled" Background="{DynamicResource InputBg}" BorderThickness="0" MinHeight="60"><ListBox.ItemTemplate><DataTemplate><StackPanel Margin="2,7"><TextBlock Text="{Binding Role}" Foreground="{DynamicResource Link}" FontWeight="Bold"/><local:AiMessageText Message="{Binding}" TextWrapping="Wrap" Margin="0,4,0,0"/></StackPanel></DataTemplate></ListBox.ItemTemplate></ListBox>
+          <TextBox x:Name="AiQuestionBox" Grid.Row="3" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" MaxLength="4000" Height="56" Margin="0,8,0,6" ToolTip="Ask about the selected installer or run. Ctrl+Enter sends." PreviewKeyDown="AiQuestion_KeyDown"/>
           <Grid Grid.Row="4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock x:Name="AiChatStatus" Text="Choose a test, then ask a question." TextWrapping="Wrap" Foreground="{DynamicResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/><Button x:Name="AiExplainButton" Grid.Column="1" Content="Explain" Click="AiExplain_Click" Padding="8,5" Margin="0,0,5,0"/><Button x:Name="AiSendButton" Grid.Column="2" Content="Send" Style="{StaticResource PrimaryButton}" Click="AiSend_Click" Padding="8,5" Margin="0,0,5,0"/><Button x:Name="AiCancelButton" Grid.Column="3" Content="Cancel" Click="AiCancel_Click" Padding="8,5" IsEnabled="False"/></Grid>
         </Grid>
       </Border>

@@ -8,11 +8,16 @@ public static class AiCredentialStore
 {
     internal static string? TestFolder;
     private static string KeyPath(string provider) => Path.Combine(TestFolder ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "InstallerAnalyzer"), provider switch
-        { "OpenAI" => "ai-openai-key.dpapi", "Claude" => "ai-anthropic-key.dpapi", _ => throw new InvalidOperationException("This provider does not use a saved cloud API key.") });
+        { "OpenAI" => "ai-openai-key.dpapi", "Claude" => "ai-anthropic-key.dpapi", "Hatz" => "ai-hatz-key.dpapi", _ => throw new InvalidOperationException("This provider does not use a saved cloud API key.") });
     public static string Load(string provider = "OpenAI")
     {
         var path = KeyPath(provider);
-        var environment = Environment.GetEnvironmentVariable(provider == "Claude" ? "INSTALLERANALYZER_ANTHROPIC_API_KEY" : "INSTALLERANALYZER_OPENAI_API_KEY");
+        var environment = Environment.GetEnvironmentVariable(provider switch
+        {
+            "Claude" => "INSTALLERANALYZER_ANTHROPIC_API_KEY",
+            "Hatz" => "INSTALLERANALYZER_HATZ_API_KEY",
+            _ => "INSTALLERANALYZER_OPENAI_API_KEY"
+        });
         if (!string.IsNullOrWhiteSpace(environment)) return environment;
         if (!File.Exists(path)) return "";
         return Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(path), null, DataProtectionScope.CurrentUser));

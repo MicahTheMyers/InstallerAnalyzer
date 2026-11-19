@@ -1,8 +1,8 @@
-# Installer Analyzer v0.14.5
+# Installer Analyzer v0.14.22
 
 Windows installer analysis and unattended deployment validation for ImmyBot and Datto RMM.
 
-Download the Windows setup or portable executable from [GitHub Releases](https://github.com/MicahTheMyers/InstallerAnalyzer/releases/latest). See the [v0.14.4 release notes](InstallerAnalyzer/docs/releases/v0.14.4.md).
+Download the Windows setup or portable executable from [GitHub Releases](https://github.com/MicahTheMyers/InstallerAnalyzer/releases/latest). See the [v0.14.22 release notes](https://github.com/MicahTheMyers/InstallerAnalyzer/releases/tag/v0.14.22).
 
 ## Verify release downloads
 

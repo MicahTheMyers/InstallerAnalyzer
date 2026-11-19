@@ -1,6 +1,6 @@
 # Installer Analyzer Privacy Policy
 
-Installer Analyzer analyzes Windows installers and helps prepare deployment packages. This policy describes the data handled by the desktop application and its optional online catalog.
+Installer Analyzer analyzes Windows installers and helps prepare deployment packages. This policy describes the data handled by the desktop application.
 
 ## Local analysis and storage
 
@@ -10,23 +10,24 @@ The app stores settings, installer history, catalog entries and analysis output 
 
 Installer Analyzer contacts GitHub to check for new releases and, when requested, download updates. Automatic checks are enabled by default and can be turned off in Settings. GitHub handles those requests under its own privacy statement.
 
-## Online catalog
+## Prior online catalog
 
-GitHub sign-in is optional. The catalog service uses your GitHub username and numeric account ID to identify you and manage access. The app can request your public GitHub avatar. If you choose to remember your session, the app protects the catalog session token using Windows data protection.
+Current versions use a local catalog. Older versions offered GitHub sign-in and online recipe submissions. For questions about a previously submitted record, contact the maintainer without posting private information in a public issue.
 
-Submitting a recipe sends the installer product, version, publisher, vendor URL, SHA-256 hash, MSI product code and signing certificate thumbprint when available. The submission record includes your GitHub username, account ID, submission time and review status. Catalog maintainers can view these records. Approved recipes shared with catalog members contain the installer metadata. Recipe submission sends metadata rather than the installer file or full analysis logs.
-
-Catalog membership and submission records may remain on the service after you sign out. To ask about access, correction or removal of a record, contact the project maintainer using GitHub without posting personal information or private logs in a public issue.
 
 ## Optional AI assistant
 
-The assistant is off by default. If you select OpenAI or Claude and send a request, the app sends your question, recent chat context and any diagnostic summary included with the request to the selected provider. Use Preview diagnostics to review the summary before sending. If you select Ollama, requests go to the Ollama server you configure. API keys you choose to save are protected using Windows data protection.
+AI Assist is off by default. When you send a question or click Explain, the app sends your question, redacted diagnostics and applicable recent chat turns to the provider you select. OpenAI, Claude and Hatz AI receive their requests over HTTPS. Ollama requests go to the server address you configure, which can be accessed through a local proxy.
+
+For the installer open in the Sandbox editor, Include Sandbox editor script is checked by default. This includes the redacted current PowerShell draft in requests. Use Preview diagnostics to review the contents and uncheck script inclusion to omit the draft before sending. Automated redaction may miss sensitive information. Saved API keys and Sandbox editor drafts are protected for your Windows account using Windows data protection.
+
 
 ## Service policies
 
 - [GitHub privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)
 - [OpenAI privacy policy](https://openai.com/policies/privacy-policy/)
 - [Anthropic privacy policy](https://www.anthropic.com/legal/privacy)
+- [Hatz AI privacy policy](https://www.hatz.ai/en/privacy-policy)
 
 ## Contact
 

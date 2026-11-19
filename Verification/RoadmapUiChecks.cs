@@ -7,7 +7,6 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using InstallerAnalyzer;
-using InstallerAnalyzer.CatalogSync;
 
 internal static class RoadmapUiChecks
 {
@@ -16,34 +15,9 @@ internal static class RoadmapUiChecks
         var folder = Path.Combine(root, "ui-matrix"); Directory.CreateDirectory(folder);
         T Field<T>(string name) => (T)typeof(MainWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)!.GetValue(window)!;
         var show = typeof(MainWindow).GetMethod("ShowPage", BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var catalogAccount = typeof(MainWindow).GetField("_catalogAccount", BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var updateCatalog = typeof(MainWindow).GetMethod("UpdateCatalogAccountControls", BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var adminPage = Field<Grid>("CatalogAdminPage");
-        var adminNav = Field<Button>("CatalogAdminNavButton");
-        var syncPanel = Field<Border>("CatalogSyncPanel");
-        try
-        {
-            check(Field<Button>("CatalogSignInButton").Visibility == Visibility.Visible &&
-                adminNav.Visibility == Visibility.Collapsed && syncPanel.Visibility == Visibility.Collapsed,
-                "Signed-out users can sign in from About and have no catalog account controls");
-            catalogAccount.SetValue(window, new CatalogAccount(200, "member", false));
-            updateCatalog.Invoke(window, null);
-            show.Invoke(window, [adminPage]);
-            check(adminNav.Visibility == Visibility.Collapsed && adminPage.Visibility == Visibility.Collapsed &&
-                syncPanel.Visibility == Visibility.Visible && !Field<WrapPanel>("CatalogSyncFields").IsEnabled,
-                "Members see Catalog Sync, need a selected installer, and cannot open the admin page");
-            catalogAccount.SetValue(window, new CatalogAccount(100, "maintainer", true));
-            updateCatalog.Invoke(window, null);
-            show.Invoke(window, [adminPage]);
-            check(adminNav.Visibility == Visibility.Visible && adminPage.Visibility == Visibility.Visible &&
-                syncPanel.Visibility == Visibility.Collapsed && Field<Button>("CatalogAdminSyncButton").IsEnabled,
-                "Maintainers can open Admin Control Center and sync the review queue");
-        }
-        finally
-        {
-            catalogAccount.SetValue(window, null);
-            updateCatalog.Invoke(window, null);
-        }
+        check(window.FindName("CatalogProfileButton") is null && window.FindName("CatalogAdminPage") is null && window.FindName("CatalogApprovedPage") is null &&
+            window.FindName("CatalogSyncPanel") is null && window.FindName("CatalogList") is ListBox,
+            "Only the local catalog remains available");
         var content = (FrameworkElement)window.Content;
         var toggle = Field<ToggleButton>("SandboxToggle");
         var originalMode = toggle.IsChecked;
@@ -119,7 +93,7 @@ internal static class RoadmapUiChecks
                         $"{theme} {pageName} fits {size.Width} x {size.Height}");
                     if (pageName == "AnalyzePage")
                     {
-                        var button = Field<Button>("InstallTabButton"); var panel = (Panel)button.Parent;
+                        var button = Field<Button>("SandboxCheckScriptButton"); var panel = (Panel)button.Parent;
                         var buttons = panel.Children.OfType<Button>().ToArray();
                         check(buttons.All(b => b.ActualWidth > 0 && b.TranslatePoint(new Point(b.ActualWidth, 0), panel).X <= panel.ActualWidth + 1),
                             $"{theme} script controls remain reachable at {size.Width} x {size.Height}");

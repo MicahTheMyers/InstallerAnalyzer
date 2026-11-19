@@ -27,7 +27,7 @@ public static class SandboxStartupMonitor
     public static Task WaitAsync(SandboxIssSession session, CancellationToken token, Action<TimeSpan, SandboxStartupState>? progress = null)
     {
         var clock = Stopwatch.StartNew();
-        return WaitCoreAsync(() => Read(session), () => clock.Elapsed, ct => Task.Delay(1000, ct), StartupBudget, token, progress);
+        return WaitCoreAsync(() => Read(session), () => clock.Elapsed, ct => Task.Delay(1000, ct), session.Timeouts.Duration("Startup"), token, progress);
     }
     private static async Task WaitCoreAsync(Func<SandboxStartupObservation> observe, Func<TimeSpan> elapsed,
         Func<CancellationToken, Task> pause, TimeSpan budget, CancellationToken token, Action<TimeSpan, SandboxStartupState>? progress)

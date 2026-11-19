@@ -19,7 +19,10 @@ public sealed class SandboxIssSession
     public string CompleteFlagPath => Path.Combine(OutputFolder, "analysis-complete.flag");
     public DateTime StartedAt { get; init; } = DateTime.Now;
     public bool RequiresIss { get; init; }
+    public bool UsesCustomScript { get; init; }
+    public string ScriptSha256 { get; init; } = "";
     public TimeSpan OverallTimeout { get; init; } = TimeSpan.FromMinutes(30);
+    public TimeoutSettings Timeouts { get; init; } = TimeoutSettings.Current.Snapshot();
 }
 
 public static partial class SandboxIssRecorder
@@ -66,20 +69,29 @@ public static partial class SandboxIssRecorder
         return File.Exists(Path.Combine(windows, "System32", "WindowsSandbox.exe"));
     }
 
-    public static SandboxIssSession Start(string installerPath, InstallerKind kind, bool requiresIss, string baseSilentArguments, string additionalPackageArguments, bool blockBundledMcAfee, bool silentOnly = false, bool prepareNetFx3 = false, bool installerCompatibility = false, InstallerArchive? archive = null)
-        => StartCore(installerPath, kind, requiresIss, baseSilentArguments, additionalPackageArguments, blockBundledMcAfee, silentOnly, prepareNetFx3, installerCompatibility, archive, null);
+    public static SandboxIssSession Start(string installerPath, InstallerKind kind, bool requiresIss, string baseSilentArguments, string additionalPackageArguments, bool blockBundledMcAfee, bool silentOnly = false, bool prepareNetFx3 = false, bool installerCompatibility = false, InstallerArchive? archive = null, string? expectedProduct = null, string? scriptTemplate = null)
+        => StartCore(installerPath, kind, requiresIss, baseSilentArguments, additionalPackageArguments, blockBundledMcAfee, silentOnly, prepareNetFx3, installerCompatibility, archive, null, expectedProduct, scriptTemplate);
 
     internal static SandboxIssSession StartReplay(string installerPath, InstallerArchive? archive, RecordedSandboxReplay replay,
-        bool blockBundledMcAfee, bool prepareNetFx3, bool installerCompatibility)
+        bool blockBundledMcAfee, bool prepareNetFx3, bool installerCompatibility, string? scriptTemplate = null)
     {
         replay.VerifySource(installerPath, archive);
         return StartCore(installerPath, InstallerKind.InstallShield, true, "", replay.Proof.AdditionalPackageArguments ?? "",
-            blockBundledMcAfee, false, prepareNetFx3 || replay.Proof.NetFx3Provisioning?.RuntimeVerified == true, installerCompatibility, archive, replay);
+            blockBundledMcAfee, false, prepareNetFx3 || replay.Proof.NetFx3Provisioning?.RuntimeVerified == true, installerCompatibility, archive, replay, scriptTemplate: scriptTemplate);
     }
 
-    private static SandboxIssSession StartCore(string installerPath, InstallerKind kind, bool requiresIss, string baseSilentArguments, string additionalPackageArguments, bool blockBundledMcAfee, bool silentOnly, bool prepareNetFx3, bool installerCompatibility, InstallerArchive? archive, RecordedSandboxReplay? replay)
+    private static SandboxIssSession StartCore(string installerPath, InstallerKind kind, bool requiresIss, string baseSilentArguments, string additionalPackageArguments, bool blockBundledMcAfee, bool silentOnly, bool prepareNetFx3, bool installerCompatibility, InstallerArchive? archive, RecordedSandboxReplay? replay, string? expectedProduct = null, string? scriptTemplate = null)
     {
         if (!File.Exists(installerPath)) throw new FileNotFoundException("Installer not found.", installerPath);
+        if (scriptTemplate is not null)
+        {
+            var errors = SandboxScriptValidator.Validate(scriptTemplate);
+            if (errors.Length > 0) throw new InvalidDataException("Sandbox script syntax errors:\n" + string.Join("\n", errors));
+        }
+        var timeouts = TimeoutSettings.Current.Snapshot();
+        var odisManifest = kind == InstallerKind.AutodeskOdis
+            ? AutodeskOdisDeployment.GetImageManifest(archive, $"{baseSilentArguments} {additionalPackageArguments}", expectedProduct)
+            : null;
         if (silentOnly && requiresIss)
             throw new InvalidOperationException("NO SILENT STRATEGY: This package requires a recorded response file. Run Full Analysis to record it before unattended testing.");
         if (!IsSandboxAvailable()) throw new InvalidOperationException("Windows Sandbox was not found. Enable 'Windows Sandbox' in Windows Features, then restart Windows.");
@@ -89,12 +101,17 @@ public static partial class SandboxIssRecorder
         var output = Path.Combine(root, "Output");
         Directory.CreateDirectory(input);
         Directory.CreateDirectory(output);
+        File.WriteAllText(Path.Combine(output, "timeout-settings.json"), timeouts.ToJson());
 
         var installerName = Path.GetFileName(installerPath);
         string copiedInstaller;
         try
         {
             copiedInstaller = archive is null ? Path.Combine(input, installerName) : archive.Stage(Path.Combine(input, "Archive"));
+            if (odisManifest is not null &&
+                (!AutodeskOdisDeployment.IsOdis(copiedInstaller, FileVersionInfo.GetVersionInfo(copiedInstaller)) ||
+                 !File.Exists(Path.Combine(Path.GetDirectoryName(copiedInstaller)!, odisManifest))))
+                throw new InvalidDataException("The Autodesk deployment ZIP must contain the ODIS Installer.exe and the referenced deployment XML in the same image folder.");
         }
         catch
         {
@@ -144,6 +161,8 @@ public static partial class SandboxIssRecorder
             var version = FileVersionInfo.GetVersionInfo(copiedInstaller);
             if (legacyProject)
                 requiredPrimaryProduct = LegacyProjectProduct;
+            else if (kind == InstallerKind.AutodeskOdis)
+                requiredPrimaryProduct = expectedProduct!.Trim();
             else if (AdobeReaderInstaller.IsOfflinePackage(copiedInstaller, version))
                 requiredPrimaryProduct = AdobeReaderInstaller.DesktopProduct;
             else if (BentleyBootstrapperService.Inspect(copiedInstaller, version.CompanyName ?? "") is not null)
@@ -171,10 +190,23 @@ public static partial class SandboxIssRecorder
                 foreach (var sourceFile in sourceFiles) File.Copy(sourceFile, Path.Combine(destination, Path.GetFileName(sourceFile)));
             }
         }
-        File.WriteAllText(ps1, BuildDiscoveryScriptCore(installerName, requiresIss ? InstallerKind.InstallShield : kind,
+        File.WriteAllText(ps1, BuildDiscoveryScriptWithTimeouts(installerName, requiresIss ? InstallerKind.InstallShield : kind,
             requiresIss ? "" : baseSilentArguments, additionalPackageArguments, blockBundledMcAfee, silentOnly, metadata,
-            recordResponses: requiresIss, netFxRequirement: netFxRequirement, requiredPrimaryProduct: requiredPrimaryProduct, installerCompatibility: installerCompatibility, componentPlan: componentPlan, archive: archive), new UTF8Encoding(false));
+            recordResponses: requiresIss, netFxRequirement: netFxRequirement, requiredPrimaryProduct: requiredPrimaryProduct, installerCompatibility: installerCompatibility, componentPlan: componentPlan, archive: archive, timeouts: timeouts, scriptTemplate: scriptTemplate), new UTF8Encoding(false));
 
+        if (scriptTemplate is not null)
+        {
+            var syntaxErrors = SandboxScriptValidator.ValidateFile(ps1);
+            if (syntaxErrors.Length > 0) throw new InvalidDataException("Sandbox script syntax errors:\n" + string.Join("\n", syntaxErrors));
+        }
+        var scriptSha256 = RegressionHistoryService.HashFile(ps1);
+        File.WriteAllText(Path.Combine(output, "sandbox-script.json"), System.Text.Json.JsonSerializer.Serialize(new
+        {
+            ApplicationVersion = UpdateService.CurrentDisplayVersion,
+            CustomScript = scriptTemplate is not null,
+            ScriptSha256 = scriptSha256,
+            TemplateSha256 = scriptTemplate is null ? null : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(scriptTemplate)))
+        }));
         var wsb = Path.Combine(root, "Record-setup-iss.wsb");
         File.WriteAllText(Path.Combine(input, "Start-Analysis.ps1"), GuestBootstrapScript, new UTF8Encoding(false));
         File.WriteAllText(wsb, BuildWsb(input, output), new UTF8Encoding(false));
@@ -188,18 +220,23 @@ public static partial class SandboxIssRecorder
             IssPath = Path.Combine(output, "setup.iss"),
             WsbPath = wsb,
             RequiresIss = requiresIss,
-            OverallTimeout = TimeSpan.FromMinutes(60)
+            Timeouts = timeouts,
+            UsesCustomScript = scriptTemplate is not null,
+            ScriptSha256 = scriptSha256,
+            OverallTimeout = timeouts.Duration("Session")
         };
     }
 
 
     public static SandboxIssSession StartLocal(string installerPath)
     {
+        var timeouts = TimeoutSettings.Current.Snapshot();
         if (!File.Exists(installerPath)) throw new FileNotFoundException("Installer not found.", installerPath);
 
         var root = Path.Combine(Path.GetTempPath(), "InstallerAnalyzer", "ISS-Local-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
         var output = Path.Combine(root, "Output");
         Directory.CreateDirectory(output);
+        File.WriteAllText(Path.Combine(output, "timeout-settings.json"), timeouts.ToJson());
         var issPath = Path.Combine(output, "setup.iss");
         var arguments = $"/r /f1\"{issPath}\"";
 
@@ -224,6 +261,9 @@ public static partial class SandboxIssRecorder
         => BuildDiscoveryScriptCore(installerName, kind, baseSilentArguments, additionalPackageArguments, blockBundledMcAfee, silentOnly, new MsiMetadata());
 
     private static string BuildDiscoveryScriptCore(string installerName, InstallerKind kind, string baseSilentArguments, string additionalPackageArguments, bool blockBundledMcAfee, bool silentOnly, MsiMetadata msiMetadata, bool recordResponses = false, string netFxRequirement = "", string requiredPrimaryProduct = "", bool installerCompatibility = false, ComponentDeploymentPlan? componentPlan = null, InstallerArchive? archive = null)
+        => BuildDiscoveryScriptWithTimeouts(installerName, kind, baseSilentArguments, additionalPackageArguments, blockBundledMcAfee, silentOnly, msiMetadata, recordResponses, netFxRequirement, requiredPrimaryProduct, installerCompatibility, componentPlan, archive, TimeoutSettings.Current.Snapshot());
+
+    private static string BuildDiscoveryScriptWithTimeouts(string installerName, InstallerKind kind, string baseSilentArguments, string additionalPackageArguments, bool blockBundledMcAfee, bool silentOnly, MsiMetadata msiMetadata, bool recordResponses = false, string netFxRequirement = "", string requiredPrimaryProduct = "", bool installerCompatibility = false, ComponentDeploymentPlan? componentPlan = null, InstallerArchive? archive = null, TimeoutSettings? timeouts = null, string? scriptTemplate = null, bool editableTemplate = false)
     {
         var escaped = archive is null ? installerName.Replace("'", "''") : "";
         var kindName = kind.ToString().Replace("'", "''");
@@ -231,7 +271,7 @@ public static partial class SandboxIssRecorder
         var additional = (additionalPackageArguments ?? string.Empty).Replace("'", "''");
         var blockMcAfee = blockBundledMcAfee ? "$true" : "$false";
         var silentOnlyValue = silentOnly ? "$true" : "$false";
-        var script = """
+        var script = scriptTemplate ?? """
 $ErrorActionPreference = 'Stop'
 $Installer = 'C:\InstallerInput\__INSTALLER__'
 $ArchiveEntry = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__ARCHIVE_ENTRY__'))
@@ -241,6 +281,7 @@ $Analysis = 'C:\InstallerOutput\install-analysis.json'
 $Heartbeat = 'C:\InstallerOutput\analysis-heartbeat.txt'
 function Set-AnalysisHeartbeat([string]$stage='activity') { try { ((Get-Date).ToString('o')+'|'+$stage) | Add-Content $Heartbeat -Encoding ASCII } catch {} }
 Set-AnalysisHeartbeat 'analysis-start'
+$IATimeouts = '__TIMEOUTS__' | ConvertFrom-Json
 $BaseSilentArguments = '__BASE_ARGS__'
 $AdditionalPackageArguments = '__ADDITIONAL_ARGS__'
 $SilentInstallArguments = (@($BaseSilentArguments,$AdditionalPackageArguments) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ' '
@@ -371,6 +412,8 @@ function Select-Primary($entries) {
           # The Reader core AppX entry is a component of the desktop MSI installation.
           if($e.WindowsInstaller -ne 1 -or $e.ProductCode -notmatch '^\{AC76BA86-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\}$' -or
               $e.DisplayName -notmatch '^Adobe Acrobat(?:\s|$)' -or $e.Publisher -notmatch '^Adobe(?:\s|$)'){continue}
+        } elseif($InstallerKind -eq 'AutodeskOdis'){
+          if($e.DisplayName -ne $RequiredPrimaryProduct -or $e.Publisher -notmatch '(?i)^Autodesk(?:[, ]|$)'){continue}
         } elseif($IsLegacyProject){
           if(-not (Test-ProjectRegistration $e)){continue}
         } elseif(-not [string]::IsNullOrWhiteSpace($RequiredPrimaryProduct)){
@@ -647,7 +690,7 @@ function Get-StringSetItems($set) {
 function Get-ObjectListItems($list) {
     $items=@(); if($null -ne $list){foreach($item in $list){$items += $item}}; return $items
 }
-function Stop-TrackedProcessTree([System.Collections.Generic.HashSet[int]]$tracked,[hashtable]$births,[int]$MaxSeconds=30) {
+function Stop-TrackedProcessTree([System.Collections.Generic.HashSet[int]]$tracked,[hashtable]$births,[int]$MaxSeconds=$IATimeouts.ProcessCleanup) {
     # v0.11.38: cleanup is explicitly bounded. A rejected candidate must never strand the
     # lifecycle before the next strategy can start.
     Set-AnalysisHeartbeat 'candidate-cleanup-tree-start'
@@ -736,6 +779,8 @@ function Get-NormalizedProcessExitCode([string]$file,[string]$arguments,[int]$ex
 }
 function Invoke-NativeProcess([string]$file,[string]$arguments,[bool]$MonitorUi=$false,[bool]$AbortOnUi=$false,[int]$MaxSeconds=0,$DetectionTarget=$null,[bool]$CompleteWhenDetected=$false,[bool]$WatchInstallPrerequisites=$false,[bool]$AllowProgressWindow=$false) {
     $launchPhase=if($null -eq $DetectionTarget){'Discovery install'}else{'Silent reinstall'}
+    $progressPhase=if(([string]$result.WorkflowStage) -match '(?i)uninstall|removal'){'Uninstall'}elseif($CompleteWhenDetected){'Silent reinstall'}else{'Installation'}
+    $prerequisite=$null
     $installedWindowTarget=$DetectionTarget
     $lastIdentityProbe=Get-Date
     # Capture the desktop BEFORE launching the candidate so even a window created immediately
@@ -775,7 +820,7 @@ function Invoke-NativeProcess([string]$file,[string]$arguments,[bool]$MonitorUi=
     $rootExit=$null
     $lastHandoffActivity=$null
     $startedAt=Get-Date; $completedByDetection=$false; $timedOut=$false
-    $clock=@{Deadline=$startedAt.AddSeconds($MaxSeconds);Limit=$startedAt.AddMinutes(50);ApplicationSeconds=$MaxSeconds;Waiting=$false;Seen=$false}
+    $clock=@{Deadline=$startedAt.AddSeconds([Math]::Min($MaxSeconds,$IATimeouts.Operation));Limit=$startedAt.AddSeconds($IATimeouts.Operation);ApplicationSeconds=$MaxSeconds;Waiting=$false;Seen=$false}
     while($true){
       Set-AnalysisHeartbeat 'native-process-monitor'
       try{$all=Update-TrackedProcessTree $tracked $births $handoffSource $launchTime}catch{$all=@()}
@@ -892,6 +937,7 @@ function Invoke-NativeProcess([string]$file,[string]$arguments,[bool]$MonitorUi=
         $prerequisite=Find-TrackedPrerequisite $all $tracked $proc.Id
         Update-InstallWait $clock $prerequisite (Get-Date)
       }
+      if($MaxSeconds -gt 0){Write-TimerProgress ($progressPhase+' · '+[IO.Path]::GetFileName($file)) $clock $prerequisite}
       if($MaxSeconds -gt 0 -and (Get-Date) -ge $clock.Deadline){$timedOut=$true;break}
       # Bootstrapper parents often exit after handing work to a child. Keep watching every PID
       # already discovered until the entire tracked tree is gone.
@@ -907,6 +953,7 @@ function Invoke-NativeProcess([string]$file,[string]$arguments,[bool]$MonitorUi=
     }
     if($completedByDetection -or $timedOut){try{Stop-TrackedProcessTree $tracked $births}catch{}}
     try{$proc.WaitForExit(2000)|Out-Null}catch{}
+    Write-PhaseProgress ($result.WorkflowStage)
     $completedAt=Get-Date
     $exit=if($aborted){-1001}elseif($completedByDetection){0}elseif($timedOut){-1002}elseif($null -ne $rootExit){$rootExit}elseif($proc.HasExited){$proc.ExitCode}else{-2}
     if($exit -in @(3010,1641)){$result.RebootRequired=$true}
@@ -946,11 +993,13 @@ function Get-UninstallExecutionArguments([string]$file,[string]$arguments,[strin
     }
     return $arguments
 }
-function Wait-ApplicationAbsent($primary,[string]$phase='Initial',[int]$maxPolls=20) {
+function Wait-ApplicationAbsent($primary,[string]$phase='Initial',[int]$maxPolls=([int][Math]::Ceiling($IATimeouts.Absence/3.0))) {
+    $absenceClock=@{Deadline=(Get-Date).AddSeconds($maxPolls*3);Waiting=$false}
     for($poll=1;$poll -le $maxPolls;$poll++){
       $detected=Test-Detected $primary
       Set-AnalysisHeartbeat ($phase.ToLowerInvariant()+'-absence-verification')
       Write-Checkpoint ($phase+' absence verification '+$poll+'/'+$maxPolls+': detected='+$detected)
+      Write-TimerProgress ($phase+' removal verification') $absenceClock
       if(-not $detected){return $true}
       if($poll -lt $maxPolls){Start-Sleep 3}
     }
@@ -1040,6 +1089,9 @@ function Get-MsiInstallCandidates {
     return $items
 }
 function Get-SilentInstallCandidates($observedSilent,$files) {
+    if($InstallerKind -eq 'AutodeskOdis'){
+      return New-InstallCandidate 'Autodesk ODIS offline deployment' $Installer $SilentInstallArguments 'Exe' 100 'Uses the Autodesk deployment engine and the XML from the original image.'
+    }
     if($IsLegacyProject){
       return New-InstallCandidate 'Project 2007 Setup with silent configuration' $Installer $SilentInstallArguments 'Exe' 100 'Uses the original Office 12 setup and the Project configuration.'
     }
@@ -1114,11 +1166,12 @@ function Invoke-InstallCandidateCore($candidate,$detectionTarget=$null) {
       if($IsVirtualBoxReducedProfile){
         return Invoke-NativeProcess 'msiexec.exe' (('/i "'+$VirtualBoxLocalMsi+'" '+$candidate.Arguments+' /L*v! "'+$msiLog+'"').Trim()) $true $true 120 $detectionTarget $false
       }
-      return Invoke-NativeProcess 'msiexec.exe' (("/i `"$($candidate.File)`" " + $candidate.Arguments + " /L*v `"$msiLog`"").Trim()) $true $true 600 $detectionTarget $true
+      return Invoke-NativeProcess 'msiexec.exe' (("/i `"$($candidate.File)`" " + $candidate.Arguments + " /L*v `"$msiLog`"").Trim()) $true $true $IATimeouts.SilentInstall $detectionTarget $true
     }
     # Bound each reinstall candidate to ten minutes and stop as soon as the expected application
     # is detected. This prevents Adobe/other bootstrappers from hanging on normal descendants.
-    return Invoke-NativeProcess $candidate.File $candidate.Arguments $true $true 600 $detectionTarget (-not $IsLegacyProject)
+    $timeout=if($InstallerKind -eq 'AutodeskOdis'){$IATimeouts.Odis}else{$IATimeouts.SilentInstall}
+    return Invoke-NativeProcess $candidate.File $candidate.Arguments $true $true $timeout $detectionTarget (-not $IsLegacyProject)
 }
 function Invoke-InstallCandidate($candidate,$detectionTarget=$null) {
     if($script:NetFx3Terminal){throw ('PREREQUISITE REQUIRED: '+$result.NetFx3Provisioning.Detail)}
@@ -1170,6 +1223,18 @@ function Get-InnoUninstallCommand([string]$command) {
     return ((@('"'+$parts[0]+'"') + @($arguments) + @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART')) -join ' ')
 }
 function Get-SilentUninstallCandidates($entry) {
+    if($InstallerKind -eq 'AutodeskOdis'){
+      if(-not [string]::IsNullOrWhiteSpace([string]$entry.QuietUninstallString)){return $entry.QuietUninstallString}
+      $command=[string]$entry.UninstallString
+      $parts=Split-Command $command
+      $odisEngine=Join-Path $env:ProgramFiles 'Autodesk\AdODIS\V1\Installer.exe'
+      if($parts -and $parts[0] -eq $odisEngine -and $parts[1] -match '(?:^|\s)-i\s+uninstall(?:\s|$)' -and
+        $parts[1] -match '(?:^|\s)-m\s+(?:"[^"]+"|\S+)'){
+        if($parts[1] -match '(?:^|\s)(?:-q|--silent|--ui_mode\s+silent)(?:\s|$)'){return $command}
+        if($parts[1] -notmatch '(?:^|\s)--ui_mode(?:\s|=)'){return ('"'+$parts[0]+'" -q '+$parts[1])}
+      }
+      return
+    }
     if($IsLegacyProject -and (Test-ProjectRegistration $entry)){
       return ('"'+$Installer+'" /uninstall PRJPRO /config "'+$ProjectConfig+'"')
     }
@@ -1305,7 +1370,7 @@ function Update-InstallWait($clock,$prerequisite,[datetime]$now) {
     if($prerequisite -and -not $clock.Waiting){
       $clock.Waiting=$true
       $clock.Seen=$true
-      $clock.Deadline=$now.AddMinutes(15)
+      $clock.Deadline=$now.AddSeconds($IATimeouts.Prerequisite)
       Write-Checkpoint ('Waiting for prerequisite setup: '+$prerequisite.Name+'; application timer is paused')
     }elseif(-not $prerequisite -and $clock.Waiting){
       $clock.Waiting=$false
@@ -1378,7 +1443,7 @@ function Get-BootstrapperMainMsiStatus($snapshots,[string]$output,[string]$produ
 }
 function Get-BootstrapperSettleDeadline($status,$primary,[bool]$settling,[bool]$prerequisiteActive,[datetime]$deadline) {
     if(-not $settling -and -not $prerequisiteActive -and $primary -and $null -ne $status -and $status.ExitCode -eq 0){
-      return $deadline.AddSeconds(60)
+      return $deadline.AddSeconds($IATimeouts.Settle)
     }
 }
 function Update-BootstrapperExitEvidence($processes,$tracked,$handles,$exits) {
@@ -1441,10 +1506,14 @@ function Watch-Bootstrapper([int]$RootPid,[string[]]$BeforeKeys) {
     $imageLog = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     $fileLog = New-Object 'System.Collections.Generic.HashSet[string]'
     $primary=$null; $new=@(); $quietSince=$null; $discoveryStarted=Get-Date
-    $clock=@{Deadline=$discoveryStarted.AddMinutes(15);Limit=$discoveryStarted.AddMinutes(50);ApplicationSeconds=900;Waiting=$false;Seen=$false}
+    $clock=@{Deadline=$discoveryStarted.AddSeconds([Math]::Min($IATimeouts.Bootstrapper,$IATimeouts.Operation));Limit=$discoveryStarted.AddSeconds($IATimeouts.Operation);ApplicationSeconds=$IATimeouts.Bootstrapper;Waiting=$false;Seen=$false}
+    if($InstallerKind -eq 'AutodeskOdis'){
+      $clock.Deadline=$discoveryStarted.AddSeconds([Math]::Min($IATimeouts.Odis,$IATimeouts.Operation))
+      $clock.ApplicationSeconds=$IATimeouts.Odis
+    }
     $mainStageStarted=$false;$connectionStageSeen=$false;$settling=$false;$settled=$false;$visualCppSeen=$false;$endedWithoutPrimary=$false
     $processHandles=@{}
-    $exitEvidence=New-Object 'System.Collections.Generic.List[object]' 
+    $exitEvidence=New-Object 'System.Collections.Generic.List[object]'
     $infra='^(msiexec|OfficeClickToRun|OfficeC2RClient|setup|installer|install|update|Reader_en_install)'
     $postInstall='^(Acrobat|AdobeCollabSync|ShowAppPickerForPDF|msedge|msedgewebview2|explorer|SSScheduler|mc-webview-cnt|identity_helper)$'
     try {
@@ -1476,12 +1545,13 @@ function Watch-Bootstrapper([int]$RootPid,[string[]]$BeforeKeys) {
       }
       $prerequisite=Find-TrackedPrerequisite $all $tracked $RootPid
       if(-not $settling){Update-InstallWait $clock $prerequisite (Get-Date)}
-      if(-not $mainStageStarted -and -not $clock.Waiting){
+      Write-TimerProgress 'Initial installation / discovery' $clock $prerequisite
+      if($InstallerKind -ne 'AutodeskOdis' -and -not $mainStageStarted -and -not $clock.Waiting){
         $mainMsi=Find-BootstrapperMainMsi $all $tracked $RequiredPrimaryProduct
         if($null -ne $mainMsi){
           $mainStageStarted=$true;$mainStarted=Get-Date
-          $maximum=if($clock.Seen){$clock.Limit}else{$discoveryStarted.AddMinutes(30)}
-          $clock.Deadline=if($mainStarted.AddMinutes(15) -lt $maximum){$mainStarted.AddMinutes(15)}else{$maximum}
+          $maximum=if($clock.Seen){$clock.Limit}else{$discoveryStarted.AddSeconds($IATimeouts.MainMsiCeiling)}
+          $clock.Deadline=if($mainStarted.AddSeconds($IATimeouts.MainMsi) -lt $maximum){$mainStarted.AddSeconds($IATimeouts.MainMsi)}else{$maximum}
           $result['BootstrapperMainMsi']=[ordered]@{ProcessId=$mainMsi.ProcessId;StartedAt=$mainStarted.ToString('o');Deadline=$clock.Deadline.ToString('o');Product=$RequiredPrimaryProduct}
           Write-Checkpoint ('Main MSI started: '+$RequiredPrimaryProduct+'; waiting for setup and product registration')
         }
@@ -1608,6 +1678,7 @@ function Write-Checkpoint([string]$stage) {
   $result.WorkflowStage=$stage; $result.WorkflowStageUpdatedAt=$now; $result.CapturedAt=$now
   $history=@($result.WorkflowStageHistory) + @([PSCustomObject]@{Stage=$stage;At=$now})
   $result.WorkflowStageHistory=$history
+  Write-PhaseProgress $stage
   Write-DebugEvent ('Stage: '+$stage)
   Write-JsonAtomic $checkpoint $result
 }
@@ -1697,7 +1768,7 @@ try {
       $result.SilentInstallCommand=('"'+$Installer+'" '+$SilentInstallArguments)
       Write-Checkpoint 'Replay recorded install in fresh Sandbox'
       $installLog='C:\InstallerOutput\iss-install-replay.log'
-      $install=Invoke-NativeProcess $Installer ($SilentInstallArguments+' /f2"'+$installLog+'"') $true $true 1200 ([PSCustomObject]@{Key=$recording.RegistryKey}) $true -AllowProgressWindow $true
+      $install=Invoke-NativeProcess $Installer ($SilentInstallArguments+' /f2"'+$installLog+'"') $true $true $IATimeouts.ReplayInstall ([PSCustomObject]@{Key=$recording.RegistryKey}) $true -AllowProgressWindow $true
       $result.InstallerExitCode=$install.ExitCode
       $result.SilentReinstallExitCode=$install.ExitCode
       $result.SilentReinstallUiDetected=$install.UiDetected
@@ -1726,7 +1797,7 @@ try {
       $result.UninstallValidationMethod='Recorded InstallShield uninstall response file'
       Write-Checkpoint 'Replay recorded uninstall in fresh Sandbox'
       $uninstallLog='C:\InstallerOutput\iss-uninstall-replay.log'
-      $uninstall=Invoke-NativeProcess $parts[0] ($arguments+' /f2"'+$uninstallLog+'"') $true $true 900 -AllowProgressWindow $true
+      $uninstall=Invoke-NativeProcess $parts[0] ($arguments+' /f2"'+$uninstallLog+'"') $true $true $IATimeouts.RecordUninstall -AllowProgressWindow $true
       $result.SilentUninstallExitCode=$uninstall.ExitCode
       $result.SilentUninstallUiDetected=$uninstall.UiDetected
       $result.SilentUninstallVisibleWindows=@($uninstall.VisibleWindows)
@@ -1783,7 +1854,7 @@ try {
     if($RecordResponses){
       Write-Checkpoint 'Record InstallShield installation response file'
       $recordArguments=('/r /f1"'+$SetupIss+'" '+$AdditionalPackageArguments).Trim()
-      $recorded=Invoke-NativeProcess $Installer $recordArguments $false $false 900 -WatchInstallPrerequisites $true
+      $recorded=Invoke-NativeProcess $Installer $recordArguments $false $false $IATimeouts.RecordInstall -WatchInstallPrerequisites $true
       $result.InstallerExitCode=$recorded.ExitCode
       if($recorded.TimedOut){throw 'InstallShield recording exceeded its watchdog window.'}
       if($recorded.ExitCode -notin @(0,3010)){throw ('InstallShield recording returned exit code '+$recorded.ExitCode+'.')}
@@ -1891,15 +1962,24 @@ try {
       $result.SelectedSilentStrategy=$selectedProbe.Name;$result.SilentInstallCommand=if($selectedProbe.Kind -eq 'Msi'){'msiexec.exe /i "'+$selectedProbe.File+'" '+$selectedProbe.Arguments}else{'"'+$selectedProbe.File+'" '+$selectedProbe.Arguments};$SilentInstallArguments=$selectedProbe.Arguments;$EffectiveSilentInstaller=$selectedProbe.File; if($ArchiveEntry){$result.DeploymentSource=$EffectiveSilentInstaller}
       $result.InitialInstallValidated=$true
       if($result.InstallerExitCode -eq 3010){$result.RebootRequired=$true}
-    } elseif($InstallerKind -in @('Unknown','Bootstrapper')){
+    } elseif($InstallerKind -in @('Unknown','Bootstrapper','AutodeskOdis')){
       $launchOptions = @{}
       if ($ArchiveEntry) { $launchOptions.WorkingDirectory = Split-Path -Parent $Installer }
+      if ($InstallerKind -eq 'AutodeskOdis') {
+        if(Select-Primary $before){throw 'The expected Autodesk product is already registered. Use a clean Sandbox to validate this deployment.'}
+        $launchOptions.ArgumentList = $SilentInstallArguments
+      }
       $p=Start-Process -FilePath $Installer -PassThru @launchOptions
       $null=$p.Handle
       $activity=Watch-Bootstrapper $p.Id $beforeKeys
       $result.BootstrapperProcesses=@($activity.Processes); $result.DiscoveredInstallerFiles=@($activity.Files); $primary=$activity.Primary; $new=@($activity.NewEntries); $result.NewUninstallEntries=$new
       Assert-BootstrapperDiscoveryComplete $activity
       try {$p.Refresh(); if($p.HasExited){$result.InstallerExitCode=$p.ExitCode}else{$result.InstallerExitCode=-2}} catch {$result.InstallerExitCode=-2}
+      if($InstallerKind -eq 'AutodeskOdis'){
+        if($result.InstallerExitCode -notin @(0,3010)){throw ('Autodesk ODIS setup did not report success. Exit code: '+$result.InstallerExitCode)}
+        if($result.InstallerExitCode -eq 3010){$result.RebootRequired=$true}
+        $result.DeploymentMechanism='Autodesk ODIS'
+      } else {
       if(-not $IsLegacyProject){
         $project=Find-ProjectFromArchiveDiscovery $new
         if($project){
@@ -1946,6 +2026,7 @@ try {
           $result.SilentInstallCommand=('msiexec.exe /i `"'+$EffectiveSilentInstaller+'`" /qn /norestart')
         }
       }
+      }
       if(-not $primary){
         $state=if($activity.TimedOut){'timed out while installer activity was still being observed'}else{'became idle'}
         throw ('Bootstrapper/unknown installer '+$state+' without an identifiable installed application. Relevant processes: '+@($result.BootstrapperProcesses).Count+'; candidate downloaded/extracted installer files: '+@($result.DiscoveredInstallerFiles).Count+'.')
@@ -1960,7 +2041,7 @@ try {
       $tracked=New-Object 'System.Collections.Generic.HashSet[int]'; [void]$tracked.Add($p.Id)
       $births=@{}; $births[[int]$p.Id]=Get-InstallerProcessBirth $p $launchTime
       $started=Get-Date
-      $clock=@{Deadline=$started.AddMinutes(10);Limit=$started.AddMinutes(50);ApplicationSeconds=600;Waiting=$false;Seen=$false}
+      $clock=@{Deadline=$started.AddSeconds([Math]::Min($IATimeouts.Discovery,$IATimeouts.Operation));Limit=$started.AddSeconds($IATimeouts.Operation);ApplicationSeconds=$IATimeouts.Discovery;Waiting=$false;Seen=$false}
       $finished=$false
       $lastHandoffActivity=$null
       $waitingForHandoff=$false
@@ -1969,6 +2050,7 @@ try {
         $all=Update-TrackedProcessTree $tracked $births $handoffSource $launchTime
         $prerequisite=Find-TrackedPrerequisite $all $tracked $p.Id
         Update-InstallWait $clock $prerequisite (Get-Date)
+        Write-TimerProgress 'Initial installation / discovery' $clock $prerequisite
         if($p.HasExited -and -not $clock.Waiting){
           $active=Test-InitialInstallerActivity $all $tracked $p.Id $handoffDirectory
           if($active -or -not $lastHandoffActivity){$lastHandoffActivity=Get-Date}
@@ -2037,7 +2119,12 @@ try {
 
     Write-Checkpoint 'Build uninstall candidate'
     $initialUninstallDone=$false
-    $uninstallCommand=if($IsLegacyProject){
+    $uninstallCommand=if($InstallerKind -eq 'AutodeskOdis'){
+      $odisUninstall=Get-SilentUninstallCandidates $primary
+      if(-not $odisUninstall){throw 'Autodesk setup registered the expected application, but no supported silent uninstall command was found. The full lifecycle cannot be validated automatically.'}
+      $result.UninstallValidationMethod='Autodesk ODIS silent uninstall'
+      $odisUninstall
+    }elseif($IsLegacyProject){
       $result.UninstallValidationMethod='Project 2007 Setup /uninstall PRJPRO'
       Get-SilentUninstallCandidates $primary
     }else{Get-InnoUninstallCommand ([string]$primary.QuietUninstallString)}
@@ -2053,10 +2140,10 @@ try {
       Write-Checkpoint 'Record InstallShield uninstall response file'
       $result.UninstallRecordingAttempted=$true
       $recordArgs=($RecordedUninstallParts[1]+' /r /f1"'+$UninstallIss+'"').Trim()
-      $recorded=Invoke-NativeProcess $RecordedUninstallParts[0] $recordArgs $false $false 900
+      $recorded=Invoke-NativeProcess $RecordedUninstallParts[0] $recordArgs $false $false $IATimeouts.RecordUninstall
       $result.RecordedUninstallExitCode=$recorded.ExitCode; $result.InitialUninstallExitCode=$recorded.ExitCode
       $result.UninstallResponseFileCreated=Test-InstallShieldResponse $UninstallIss
-      if($recorded.TimedOut){throw 'InstallShield uninstall recording exceeded the 15-minute timeout.'}
+      if($recorded.TimedOut){throw 'InstallShield uninstall recording exceeded its configured timeout.'}
       if($recorded.ExitCode -notin @(0,3010)){throw ('InstallShield uninstall recording returned exit code '+$recorded.ExitCode+'.')}
       if(-not $result.UninstallResponseFileCreated){throw 'InstallShield uninstall recording did not create a valid uninstall.iss.'}
       if(-not (Wait-ApplicationAbsent $primary 'Initial')){throw 'Application remained detected after recorded uninstall.'}
@@ -2068,7 +2155,7 @@ try {
       foreach($proposal in @(Get-SilentUninstallCandidates $primary)){
         Write-Checkpoint 'Discover initial silent uninstall strategy'
         $parts=Split-Command $proposal; if(-not $parts){continue}
-        try {$trial=Invoke-NativeProcess $parts[0] $parts[1] $true $true 120}catch{continue}
+        try {$trial=Invoke-NativeProcess $parts[0] $parts[1] $true $true $IATimeouts.UninstallProbe}catch{continue}
         $result.UiDiagnostics+=@($trial.UiDiagnostics)
         Write-DebugEvent 'Initial uninstall hypothesis result' ([PSCustomObject]@{Command=$proposal;ExitCode=$trial.ExitCode;UiDetected=$trial.UiDetected})
         Start-Sleep 3
@@ -2096,7 +2183,7 @@ try {
       for($initialAttempt=1;$initialAttempt -le 4;$initialAttempt++){
         $executionArguments=Get-UninstallExecutionArguments $parts[0] $parts[1] 'initial'
         Write-Checkpoint ('Initial silent uninstall attempt '+$initialAttempt+'/4')
-        $uninstallTimeout=if([IO.Path]::GetFileName($parts[0]) -in @('msiexec','msiexec.exe')){900}else{300}
+        $uninstallTimeout=if($InstallerKind -eq 'AutodeskOdis' -or [IO.Path]::GetFileName($parts[0]) -in @('msiexec','msiexec.exe')){$IATimeouts.MsiUninstall}else{$IATimeouts.Uninstall}
         $initialExecution=Invoke-NativeProcess $parts[0] $executionArguments $true $true $uninstallTimeout
         $result.UiDiagnostics+=@($initialExecution.UiDiagnostics)
         $result.InitialUninstallExitCode=$initialExecution.ExitCode
@@ -2105,7 +2192,7 @@ try {
         Write-Checkpoint 'Windows Installer busy (1618); waiting before initial-uninstall retry'
         for($busyWait=0;$busyWait -lt 15;$busyWait++){Set-AnalysisHeartbeat 'initial-uninstall-busy-wait';Start-Sleep 1}
       }
-      if($initialExecution.TimedOut){throw 'Initial silent uninstall exceeded the 5-minute command timeout. See msi-uninstall-initial.log when available.'}
+      if($initialExecution.TimedOut){throw 'Initial silent uninstall exceeded its configured command timeout. See msi-uninstall-initial.log when available.'}
       if($initialExecution.UiDetected){
         $result['MsiRemovalUiActions']=@(Get-MsiRemovalUiActions $EffectiveSilentInstaller)
         throw ('Initial uninstall displayed interactive UI: '+($initialExecution.VisibleWindows -join '; '))
@@ -2135,7 +2222,7 @@ try {
           if($RecordResponses){
             $replayLog='C:\InstallerOutput\iss-install-replay.log'
             Remove-Item -LiteralPath $replayLog -Force -ErrorAction SilentlyContinue
-            $ri=Invoke-NativeProcess $candidate.File ($candidate.Arguments+' /f2"'+$replayLog+'"') $true $true 600 $primary $true
+            $ri=Invoke-NativeProcess $candidate.File ($candidate.Arguments+' /f2"'+$replayLog+'"') $true $true $IATimeouts.SilentInstall $primary $true
             if(-not (Test-InstallShieldReplayLog $replayLog)){throw 'InstallShield reinstall replay did not produce exactly one successful ResultCode=0.'}
           }else{$ri=Invoke-InstallCandidate $candidate $primary}
         }
@@ -2256,7 +2343,7 @@ try {
             $executionArguments+=' /f2"'+$replayLog+'"'
           }
           # MSI can spend several minutes removing shared assemblies after reinstall.
-          $uninstallTimeout=if([IO.Path]::GetFileName($parts2[0]) -in @('msiexec','msiexec.exe')){900}else{300}
+          $uninstallTimeout=if($InstallerKind -eq 'AutodeskOdis' -or [IO.Path]::GetFileName($parts2[0]) -in @('msiexec','msiexec.exe')){$IATimeouts.MsiUninstall}else{$IATimeouts.Uninstall}
           $u2=Invoke-NativeProcess $parts2[0] $executionArguments $true $true $uninstallTimeout
           if($RecordResponses -and $result.UninstallResponseFileCreated -and -not (Test-InstallShieldReplayLog $replayLog)){throw 'InstallShield uninstall replay did not produce exactly one successful ResultCode=0.'}
           $result.UiDiagnostics+=@($u2.UiDiagnostics)
@@ -2283,12 +2370,15 @@ try {
       } elseif($u2.ExitCode -notin @(0,3010)){
         $result.ValidationError='Final silent uninstall returned exit code '+$u2.ExitCode+'.'
       } else {
-        Write-Checkpoint 'Final absence verification 0/20'
+        $absencePolls=[int][Math]::Ceiling($IATimeouts.Absence/3.0)
+        $absenceClock=@{Deadline=(Get-Date).AddSeconds($absencePolls*3);Waiting=$false}
+        Write-Checkpoint ('Final absence verification 0/'+$absencePolls)
         $result.PostUninstallDetected=$true
-        for($absencePoll=1;$absencePoll -le 20;$absencePoll++){
+        for($absencePoll=1;$absencePoll -le $absencePolls;$absencePoll++){
           Start-Sleep 3
           $result.PostUninstallDetected=Test-Detected $current
-          Write-Checkpoint ('Final absence verification '+$absencePoll+'/20: detected='+$result.PostUninstallDetected)
+          Write-Checkpoint ('Final absence verification '+$absencePoll+'/'+$absencePolls+': detected='+$result.PostUninstallDetected)
+          Write-TimerProgress 'Final removal verification' $absenceClock
           if(-not $result.PostUninstallDetected){
             Test-VirtualBoxDriverState 'Final uninstall' $false
             if($IsVirtualBoxReducedProfile){$result['VirtualBoxDriverCleanupVerified']=$true}
@@ -2297,7 +2387,7 @@ try {
           }
         }
         $result.SilentUninstallValidated=(-not $result.PostUninstallDetected)
-        if(-not $result.SilentUninstallValidated){$result.ValidationError='Final uninstall returned success, but the application remained detected after the bounded 60-second absence verification.'}
+        if(-not $result.SilentUninstallValidated){$result.ValidationError='Final uninstall returned success, but the application remained detected after the configured absence verification.'}
       }
     }
     }
@@ -2335,21 +2425,28 @@ try { Write-DebugEvent 'Analysis complete; optional cleanup delegated to Sandbox
         var encodedMsiMetadata = Convert.ToBase64String(Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(msiMetadata)));
         var values = new Dictionary<string, string>
         {
+            ["__TIMEOUTS__"] = (timeouts ?? TimeoutSettings.Current).ToJson(),
             ["__INSTALLER__"] = escaped, ["__KIND__"] = kindName, ["__BASE_ARGS__"] = baseSilent,
             ["__ANALYZER_VERSION__"] = UpdateService.CurrentDisplayVersion.Replace("'", "''"),
             ["__PROJECT_CONFIG__"] = Project2007Deployment.Configuration.Replace("'", "''"),
             ["__ARCHIVE_ENTRY__"] = archive is null ? "" : Convert.ToBase64String(Encoding.UTF8.GetBytes(archive.Entry)),
             ["__ARCHIVE_HASH__"] = archive?.Sha256 ?? "",
             ["__ADDITIONAL_ARGS__"] = additional, ["__BLOCK_MCAFEE__"] = blockMcAfee,
+#if STORE_BUILD
+            ["__SANDBOX_COMPATIBILITY__"] = "$false",
+#else
             ["__SANDBOX_COMPATIBILITY__"] = installerCompatibility ? "$true" : "$false",
+#endif
             ["__COMPONENT_PLAN__"] = componentPlan is null ? "" : Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(componentPlan)),
             ["__RECORD_RESPONSES__"] = recordResponses ? "$true" : "$false",
             ["__ISS_DIALOG_SEQUENCE__"] = InstallShieldResponseFormat.HeaderlessDialogSequence,
-            ["__SILENT_ONLY__"] = silentOnlyValue, ["__ROADMAP_HELPERS__"] = RoadmapEvidenceScript.Replace("__MSI_METADATA__", encodedMsiMetadata) + Environment.NewLine + DetailedDetectionEvidenceScript + Environment.NewLine + RuntimeEnvironmentEvidenceScript + Environment.NewLine + NetFx3ProvisioningScript + Environment.NewLine + GintPrerequisiteScript + Environment.NewLine + SandboxCompatibilityScript + Environment.NewLine + MsiIdentityEvidenceScript + Environment.NewLine + PrerequisiteFileEvidenceScript + Environment.NewLine + PrerequisiteServiceEvidenceScript + Environment.NewLine + DllEvidenceScript + Environment.NewLine + AppControlEvidenceScript + Environment.NewLine + PayloadTraceEvidenceScript.Replace("__TRACE_WORKER_B64__", Convert.ToBase64String(Encoding.UTF8.GetBytes(PayloadTraceWorkerScript))),
+            ["__SILENT_ONLY__"] = silentOnlyValue, ["__ROADMAP_HELPERS__"] = BuildRoadmapHelpers(encodedMsiMetadata),
             ["__REQUIRED_PRIMARY__"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(requiredPrimaryProduct)), ["__NETFX_EVIDENCE__"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(netFxRequirement)), ["__MSI_METADATA__"] = encodedMsiMetadata
         };
+        if (editableTemplate)
+            return script.Replace("__ROADMAP_HELPERS__", BuildRoadmapHelpers("__MSI_METADATA__"), StringComparison.Ordinal);
         // One pass prevents token-shaped installer names/arguments being substituted as code.
-        return System.Text.RegularExpressions.Regex.Replace(script, "__(?:INSTALLER|ANALYZER_VERSION|PROJECT_CONFIG|ARCHIVE_ENTRY|ARCHIVE_HASH|KIND|BASE_ARGS|ADDITIONAL_ARGS|BLOCK_MCAFEE|SILENT_ONLY|RECORD_RESPONSES|ISS_DIALOG_SEQUENCE|ROADMAP_HELPERS|MSI_METADATA|NETFX_EVIDENCE|REQUIRED_PRIMARY|SANDBOX_COMPATIBILITY|COMPONENT_PLAN)__", match => values[match.Value]);
+        return System.Text.RegularExpressions.Regex.Replace(script, "__(?:TIMEOUTS|INSTALLER|ANALYZER_VERSION|PROJECT_CONFIG|ARCHIVE_ENTRY|ARCHIVE_HASH|KIND|BASE_ARGS|ADDITIONAL_ARGS|BLOCK_MCAFEE|SILENT_ONLY|RECORD_RESPONSES|ISS_DIALOG_SEQUENCE|ROADMAP_HELPERS|MSI_METADATA|NETFX_EVIDENCE|REQUIRED_PRIMARY|SANDBOX_COMPATIBILITY|COMPONENT_PLAN)__", match => values[match.Value]);
     }
 
     private static string BuildWsb(string input, string output)

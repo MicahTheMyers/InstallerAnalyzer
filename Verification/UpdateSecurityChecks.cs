@@ -137,7 +137,7 @@ internal static class UpdateSecurityChecks
                 try { File.WriteAllBytes(path, new byte[] { 0 }); } catch (IOException) { writeBlocked = true; }
                 check(writeBlocked, "The verified installer remains locked against replacement before launch");
                 await fixture.Service.LaunchInstallerAsync(downloaded);
-                check(fixture.SignatureCalls == 2 && fixture.Launches.Single().FileName == path && fixture.Launches.Single().Arguments == "/SILENT /CLOSEAPPLICATIONS",
+                check(fixture.SignatureCalls == 2 && fixture.Launches.Single().FileName == path && fixture.Launches.Single().Arguments == "/SILENT /CLOSEAPPLICATIONS /NORESTARTAPPLICATIONS /IAREOPEN",
                     "Launch rechecks checksum and publisher and passes only the verified path to the fake launcher");
                 var repeated = false;
                 try { await fixture.Service.LaunchInstallerAsync(downloaded); } catch (InvalidOperationException) { repeated = true; }

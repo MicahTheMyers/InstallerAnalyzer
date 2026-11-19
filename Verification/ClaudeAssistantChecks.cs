@@ -21,7 +21,7 @@ internal static class ClaudeAssistantChecks
     {
         using var handler = new Handler(); using var client = new HttpClient(handler);
         var service = (AiChatService)Activator.CreateInstance(typeof(AiChatService), BindingFlags.Instance | BindingFlags.NonPublic, null, new object[] { client }, null)!;
-        var options = new AiChatOptions(true, true, "Claude", "claude-fixture-model", "http://127.0.0.1:11434");
+        var options = new AiChatOptions(true, "Claude", "claude-fixture-model", "http://127.0.0.1:11434");
         HttpResponseMessage Response(string json, HttpStatusCode code = HttpStatusCode.OK) => new(code) { Content = new StringContent(json) };
         Task<string> Send(AiChatOptions? config = null, string key = "fixture-key", CancellationToken token = default) => service.SendAsync(config ?? options, key,
             "Evidence password=fixture-secret", new[] { new AiChatTurn("system", "discard me"), new AiChatTurn("assistant", "Previous answer") }, "Explain this test", token);
@@ -42,7 +42,6 @@ internal static class ClaudeAssistantChecks
         };
         check(Send().GetAwaiter().GetResult() == "Observed evidence.\nCheck logs.".Replace("\n", Environment.NewLine), "Claude aggregates text blocks");
         var count = handler.Sends;
-        Refused(() => Send(options with { TestModeEnabled = false }), "Test Mode", "Claude requires Test Mode");
         Refused(() => Send(options with { Enabled = false }), "AI Assist", "Claude requires AI Assist enabled");
         Refused(() => Send(key: ""), "ANTHROPIC", "Claude missing key gives provider-specific setup advice");
         using (var cts = new CancellationTokenSource()) { cts.Cancel(); try { Send(token: cts.Token).GetAwaiter().GetResult(); check(false, "Claude pre-cancellation"); } catch (OperationCanceledException) { check(true, "Claude pre-cancellation"); } }
@@ -53,19 +52,55 @@ internal static class ClaudeAssistantChecks
         Refused(() => Send(), "text-size limit", "Claude response byte limit enforced");
         foreach (var (code, message) in new[] { (HttpStatusCode.Unauthorized, "rejected access"), (HttpStatusCode.TooManyRequests, "quota") })
         { handler.Reply = _ => Task.FromResult(Response("private provider error must not leak", code)); Refused(() => Send(), message, "Claude HTTP errors are safely explained: " + code); }
+        foreach (var (code, message) in new[] { ("insufficient_quota", "quota or billing"), ("slow_down", "temporarily rate-limited"), ("project_spend_limit_exceeded", "project reached its spend limit") })
+        {
+            handler.Reply = _ => Task.FromResult(Response(JsonSerializer.Serialize(new { error = new { code, message = "private provider text" } }), HttpStatusCode.TooManyRequests));
+            Refused(() => Send(options with { Provider = "OpenAI" }), message, "OpenAI 429 distinguishes " + code);
+        }
         handler.Reply = _ => Task.FromResult(Response("{\"content\":[{\"type\":\"text\",\"text\":\"password=fixture-output-secret\"}]}"));
         check(!Send().GetAwaiter().GetResult().Contains("fixture-output-secret"), "Claude answer secrets are redacted");
         handler.Reply = request => Task.FromResult(Response(request.RequestUri!.Host == "api.openai.com" ? "{\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"OpenAI OK\"}]}]}" : "{\"message\":{\"content\":\"Local OK\"}}"));
         check(Send(options with { Provider = "OpenAI" }).GetAwaiter().GetResult() == "OpenAI OK" && Send(options with { Provider = "Ollama", Model = "local-fixture" }, "").GetAwaiter().GetResult() == "Local OK", "OpenAI and local Ollama responses remain supported");
+        var hatz = options with { Provider = "Hatz", Model = "auto" };
+        count = handler.Sends;
+        Refused(() => Send(hatz, ""), "INSTALLERANALYZER_HATZ_API_KEY", "Hatz missing key gives provider-specific setup advice");
+        Refused(() => Send(hatz with { Model = "agent-fixture" }), "read-only", "Hatz rejects agent IDs");
+        check(handler.Sends == count, "Unconfigured Hatz and Hatz agent requests send nothing");
+        handler.Reply = _ => Task.FromResult(Response("""{"choices":[{"message":{"tool_calls":[{"type":"function"}]}}]}"""));
+        Refused(() => Send(hatz), "text replies only", "Hatz refuses tool responses");
+        foreach (var (code, detail) in new[] {
+            (HttpStatusCode.Unauthorized, "Save a current Hatz API key"),
+            (HttpStatusCode.Forbidden, "Hatz administrator")
+        })
+        {
+            const string requestId = "640bd251-6490-4a4d-bbd3-5537d95c603f";
+            handler.Reply = _ =>
+            {
+                var response = Response("private provider error", code);
+                response.Headers.Add("X-Request-ID", requestId);
+                return Task.FromResult(response);
+            };
+            try { Send(hatz).GetAwaiter().GetResult(); check(false, "Hatz HTTP " + (int)code); }
+            catch (InvalidOperationException ex)
+            {
+                check(ex.Message.Contains($"HTTP {(int)code}") && ex.Message.Contains(detail) &&
+                      ex.Message.Contains(requestId) && !ex.Message.Contains("private provider error"),
+                    $"Hatz HTTP {(int)code} reports relevant setup guidance and a request ID");
+            }
+        }
 
         var testFolder = typeof(AiCredentialStore).GetField("TestFolder", BindingFlags.NonPublic | BindingFlags.Static)!;
         var oldFolder = testFolder.GetValue(null); var folder = Path.Combine(root, "ai-credentials"); testFolder.SetValue(null, folder);
         try
         {
             AiCredentialStore.Save("fixture-openai", "OpenAI"); AiCredentialStore.Save("fixture-claude", "Claude");
+            AiCredentialStore.Save("fixture-hatz", "Hatz");
             string Decrypt(string name) => Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(Path.Combine(folder, name)), null, DataProtectionScope.CurrentUser));
             check(Decrypt("ai-openai-key.dpapi") == "fixture-openai" && Decrypt("ai-anthropic-key.dpapi") == "fixture-claude", "Provider keys use separate Windows-protected files");
             AiCredentialStore.Clear("Claude"); check(File.Exists(Path.Combine(folder, "ai-openai-key.dpapi")) && !File.Exists(Path.Combine(folder, "ai-anthropic-key.dpapi")), "Removing Claude key preserves OpenAI key");
+            check(Decrypt("ai-hatz-key.dpapi") == "fixture-hatz", "Hatz has its own Windows-protected key");
+            AiCredentialStore.Clear("Hatz");
+            check(!File.Exists(Path.Combine(folder, "ai-hatz-key.dpapi")) && Decrypt("ai-openai-key.dpapi") == "fixture-openai", "Removing Hatz key preserves OpenAI key");
         }
         finally { testFolder.SetValue(null, oldFolder); }
 
@@ -73,7 +108,7 @@ internal static class ClaudeAssistantChecks
         T Get<T>(string name) => (T)typeof(MainWindow).GetField(name, flags)!.GetValue(window)!;
         var provider = Get<ComboBox>("AiProviderBox"); var model = Get<TextBox>("AiModelBox");
         var oldIndex = provider.SelectedIndex; var oldText = model.Text;
-        var fields = new[] { "_aiOpenAiModel", "_aiOllamaModel", "_aiClaudeModel" }.ToDictionary(n => n, n => typeof(MainWindow).GetField(n, flags)!.GetValue(window));
+        var fields = new[] { "_aiOpenAiModel", "_aiOllamaModel", "_aiClaudeModel", "_aiHatzModel" }.ToDictionary(n => n, n => typeof(MainWindow).GetField(n, flags)!.GetValue(window));
         try
         {
             provider.SelectedIndex = 0; model.Text = "openai-ui-fixture"; provider.SelectedIndex = 2;
@@ -86,6 +121,18 @@ internal static class ClaudeAssistantChecks
             using (var settings = JsonDocument.Parse(File.ReadAllText(settingsPath)))
                 check(settings.RootElement.GetProperty("AiProvider").GetString() == "Claude" && settings.RootElement.GetProperty("AiClaudeModel").GetString() == "claude-ui-fixture" && !File.ReadAllText(settingsPath).Contains("unsaved-fixture-key"), "Claude provider and model persist without saving key into settings JSON");
             provider.SelectedIndex = 0; check(model.Text == "openai-ui-fixture", "Switching back restores OpenAI model");
+            provider.SelectedIndex = 3;
+            check(((ComboBoxItem)provider.SelectedItem).Content as string == "Hatz AI" && model.Text == "auto" &&
+                  Get<TextBlock>("AiApiKeyLabel").Text == "Hatz AI API key" && Get<TextBlock>("AiCloudPrivacyText").Text.Contains("Hatz AI receives"),
+                "Hatz displays its default model, key label and privacy notice");
+            model.Text = "hatz-ui-fixture";
+            provider.SelectedIndex = 2;
+            check(model.Text == "claude-ui-fixture", "Hatz model settings preserve the Claude model");
+            provider.SelectedIndex = 3;
+            using (var settings = JsonDocument.Parse(File.ReadAllText(settingsPath)))
+                check(model.Text == "hatz-ui-fixture" && settings.RootElement.GetProperty("AiProvider").GetString() == "Hatz" &&
+                      settings.RootElement.GetProperty("AiHatzModel").GetString() == "hatz-ui-fixture",
+                    "Hatz selection and model persist in app settings");
         }
         finally
         {

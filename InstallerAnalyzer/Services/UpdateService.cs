@@ -57,7 +57,7 @@ public sealed class UpdateService
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("InstallerAnalyzer/" + CurrentDisplayVersion);
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         _http.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
-        _http.Timeout = TimeSpan.FromSeconds(20);
+        _http.Timeout = Timeout.InfiniteTimeSpan;
         _http.MaxResponseContentBufferSize = 1024 * 1024; // Release metadata only; downloads stream under their own limit.
     }
 
@@ -68,6 +68,9 @@ public sealed class UpdateService
 
     public async Task<UpdateInfo?> GetLatestAsync(CancellationToken cancellationToken = default)
     {
+        using var requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        requestTimeout.CancelAfter(TimeoutSettings.Current.Duration("UpdateRequest"));
+        cancellationToken = requestTimeout.Token;
         using var response = await _http.GetAsync(LatestReleaseApi, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
         response.EnsureSuccessStatusCode(); // API redirects are deliberately not followed.
@@ -88,7 +91,7 @@ public sealed class UpdateService
         var expectedHash = RequiredDigest(asset.Digest); // Fail before network or filesystem writes.
         var origin = RequiredOrigin(asset.DownloadUrl, update.Tag);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromMinutes(10));
+        timeout.CancelAfter(TimeoutSettings.Current.Duration("UpdateDownload"));
         var token = timeout.Token;
         string? publisher = null;
         if (_releaseKey is null)
@@ -156,7 +159,7 @@ public sealed class UpdateService
                 update.Consumed = true;
                 VerifyFile(update.LockedFile, update.Path, update.Hash, update.Publisher, update.Version);
                 cancellationToken.ThrowIfCancellationRequested();
-                _startInstaller(new ProcessStartInfo { FileName = update.Path, Arguments = "/SILENT /CLOSEAPPLICATIONS", WorkingDirectory = update.Folder, UseShellExecute = true });
+                _startInstaller(new ProcessStartInfo { FileName = update.Path, Arguments = "/SILENT /CLOSEAPPLICATIONS /NORESTARTAPPLICATIONS /IAREOPEN", WorkingDirectory = update.Folder, UseShellExecute = true });
             }
         }, cancellationToken);
     }
@@ -207,7 +210,9 @@ public sealed class UpdateService
         var current = origin;
         for (var redirects = 0; redirects <= 4; redirects++)
         {
-            var response = await _http.GetAsync(current, HttpCompletionOption.ResponseHeadersRead, token);
+            using var requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            requestTimeout.CancelAfter(TimeoutSettings.Current.Duration("UpdateRequest"));
+            var response = await _http.GetAsync(current, HttpCompletionOption.ResponseHeadersRead, requestTimeout.Token);
             if ((int)response.StatusCode is not (301 or 302 or 303 or 307 or 308)) return response;
             try
             {

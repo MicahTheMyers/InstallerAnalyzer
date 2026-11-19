@@ -64,6 +64,17 @@ public sealed class InstallerDetector
         }
         var vi = FileVersionInfo.GetVersionInfo(path);
         r.ProductName = vi.ProductName ?? ""; r.CompanyName = vi.CompanyName ?? ""; r.FileVersion = vi.FileVersion ?? ""; r.Architecture = GetArchitecture(path);
+        if (AutodeskOdisDeployment.IsOdis(path, vi))
+        {
+            r.Kind = InstallerKind.AutodeskOdis;
+            r.Confidence = 95;
+            r.ProductName = "Autodesk ODIS";
+            r.Evidence.Add("Autodesk publisher metadata and Autodesk Installation Services identify the ODIS setup engine.");
+            if (Path.GetFileName(path).EndsWith("_webinstall.exe", StringComparison.OrdinalIgnoreCase))
+                r.Evidence.Add("This file is the Autodesk web installer. Use the full product deployment image or the product's documented standalone update package for unattended deployment.");
+            r.Evidence.Add(AutodeskOdisDeployment.ImageInstructions);
+            return r;
+        }
         if (extension.Equals(".exe", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(r.CompanyName.Trim(), "Microsoft Corporation", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(r.ProductName.Trim(), "Microsoft Setup Bootstrapper", StringComparison.OrdinalIgnoreCase) &&
