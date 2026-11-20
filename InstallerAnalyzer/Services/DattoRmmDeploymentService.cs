@@ -42,10 +42,11 @@ public static class DattoRmmDeploymentService
         if (!Regex.IsMatch(proof.InstallerSha256 ?? "", "^[A-Fa-f0-9]{64}$")) return "A source SHA-256 from the completed analysis is required.";
         if (!components && !string.IsNullOrWhiteSpace(proof.DeploymentSource) && !string.Equals(Path.GetFileName(proof.DeploymentSource), source.FileName, StringComparison.OrdinalIgnoreCase))
             return "This strategy uses a separate deployment payload; original-file export is not supported for it yet.";
-        if (string.IsNullOrWhiteSpace(proof.CombinedSilentArguments ?? proof.BaseSilentArguments)) return "A validated silent installation command is required.";
-        if (source.Archive is null && Regex.IsMatch(proof.CombinedSilentArguments ?? proof.BaseSilentArguments ?? "", @"(?i)(?:^|\s)TRANSFORMS\s*="))
-            return "MSI transforms require a multi-file deployment package, which is not supported by this export yet.";
-        var arguments = (proof.CombinedSilentArguments ?? proof.BaseSilentArguments ?? "") + " " + proof.UninstallCandidate;
+        var installArguments = proof.CombinedSilentArguments ?? proof.BaseSilentArguments;
+        if (string.IsNullOrWhiteSpace(installArguments)) return "A validated silent installation command is required.";
+        if (source.Archive is null && RequiresTransformAttachment(installArguments, source.Kind == InstallerKind.Msi))
+            return "External or ambiguous MSI transforms require a validated installer ZIP containing the MSI and its transform files.";
+        var arguments = installArguments + " " + proof.UninstallCandidate;
         if (Regex.IsMatch(arguments, @"(?i)(?:^|\s|[/\-])(?:password|passwd|pwd|token|apikey|api_key|secret|clientsecret|licensekey)\s*(?:=|:|\s)"))
             return "Credential-bearing installer arguments need a runtime-variable integration before export.";
         var rule = proof.DetectionStrategies.Where(d => d.Validated).OrderByDescending(d => d.Rank).FirstOrDefault();
@@ -56,6 +57,31 @@ public static class DattoRmmDeploymentService
         if (proof.UninstallResponseFileCreated && !ValidResponse(responses, "uninstall.iss")) return "The recorded uninstall.iss response file is missing or invalid.";
         if (string.IsNullOrWhiteSpace(proof.UninstallCandidate)) return "A validated uninstall command is required.";
         return null;
+    }
+
+    private static bool RequiresTransformAttachment(string arguments, bool standaloneMsi)
+    {
+        var transformSeen = false;
+        // Keep quoted property values together so text inside another property isn't read as an assignment.
+        foreach (Match match in Regex.Matches(arguments, @"(?<!\S)(?:(?:[^\s""]|""[^""]*"")+(?=\s|$)|\S+)"))
+        {
+            var token = match.Value;
+            var unclosedQuote = token[0] == '"' && token[^1] != '"';
+            if (token.Length >= 2 && token[0] == '"' && token[^1] == '"') token = token[1..^1];
+            var equals = token.IndexOf('=');
+            var property = equals < 0 ? token : token[..equals];
+            if (!property.Trim().TrimStart('"').Equals("TRANSFORMS", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!standaloneMsi || transformSeen || equals < 0 || unclosedQuote) return true;
+            transformSeen = true;
+            var list = token[(equals + 1)..];
+            if (list.Length >= 2 && list[0] == '"' && list[^1] == '"') list = list[1..^1];
+            // Windows Installer loads colon-prefixed names directly from the validated MSI.
+            if (list.Split(';').Any(name => name.Length <= 1 || name[0] != ':' ||
+                string.IsNullOrWhiteSpace(name[1..]) || name[1..].IndexOfAny(['\\', '/', ':', '"']) >= 0 ||
+                name.Any(char.IsControl)))
+                return true;
+        }
+        return false;
     }
 
     private static bool IsUserScope(string? value) => Regex.IsMatch(value ?? "", @"(?i)HKCU:|HKEY_CURRENT_USER|\\Users\\|%APPDATA%|%LOCALAPPDATA%|%USERPROFILE%");
@@ -199,7 +225,7 @@ Output: IA_DETECTED=1/0; IA_ACTION; IA_REBOOT_REQUIRED=1 when needed. Exit 0 mea
 
 This ZIP is a component-creation kit, not a native .cpt import. After creating/testing the component in Datto RMM, its normal Export action can produce a native .cpt. Tenant/API upload and job submission are not performed by Installer Analyzer.
 
-Supported initial scope: lifecycle-validated single-file machine-wide MSI/EXE deployments and recorded InstallShield response files. Per-user, MSIX, transforms, separate extracted payloads and credential-bearing arguments need additional integration. Sandbox proof does not establish Datto tenant acceptance. No Datto credentials are requested or included. Review generated installer arguments before sharing the kit.
+Supports lifecycle-validated machine-wide MSI/EXE deployments, embedded MSI transforms, validated installer ZIPs and recorded InstallShield response files. External transforms must travel with the MSI in a validated installer ZIP. Per-user, MSIX, separate extracted payloads and credential-bearing arguments need additional integration. Sandbox proof does not establish Datto tenant acceptance. No Datto credentials are requested or included. Review generated installer arguments before sharing the kit.
 
 Official documentation:
 https://rmm.datto.com/help/en/Content/3NEWUI/Automation/Components/CreateAComponent.htm

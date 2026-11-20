@@ -72,7 +72,9 @@ internal static class Program
         if (args.Length >= 3 && args[1] is "--live-cancel-startup" or "--live-cancel-install") return LiveCancellationChecks.Run(root, args[2], args[1] == "--live-cancel-install");
         if (args.Length >= 3 && args[1] == "--campaign") return LiveCampaignChecks.Run(root, args[2]);
         if (args.Length >= 3 && args[1] == "--live") return LiveSandboxChecks.Run(root, args[2]);
-        if (args.Length >= 4 && args[1] == "--live-archive") return LiveSandboxChecks.Run(root, args[2], archiveEntry: args[3]);
+        if (args.Length >= 4 && args[1] == "--live-archive")
+            return LiveSandboxChecks.Run(root, args[2], archiveEntry: args[3],
+                installerCompatibility: args.Skip(4).Contains("--legacy-compatibility", StringComparer.Ordinal));
         if (args.Length >= 3 && args[1] == "--live-prerequisites") return LiveSandboxChecks.Run(root, args[2],requirePropertySnapshot:true);
         if (args.Length >= 3 && args[1] == "--live-runner") return LiveRunnerChecks.Run(root, args[2]);
         try

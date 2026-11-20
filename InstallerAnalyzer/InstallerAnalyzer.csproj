@@ -9,9 +9,9 @@
     <AssemblyName>InstallerAnalyzer</AssemblyName>
     <RootNamespace>InstallerAnalyzer</RootNamespace>
     <ApplicationIcon>Assets\InstallerAnalyzer.ico</ApplicationIcon>
-    <Version>0.14.22</Version>
-    <AssemblyVersion>0.14.22.0</AssemblyVersion>
-    <FileVersion>0.14.22.0</FileVersion>
+    <Version>0.14.24</Version>
+    <AssemblyVersion>0.14.24.0</AssemblyVersion>
+    <FileVersion>0.14.24.0</FileVersion>
   </PropertyGroup>
   <PropertyGroup Condition="'$(StoreBuild)' == 'true'">
     <DefineConstants>$(DefineConstants);STORE_BUILD</DefineConstants>

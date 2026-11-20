@@ -58,6 +58,31 @@ internal static class DattoRmmChecks
         proof.CombinedSilentArguments="/qn PROPERTY=\"$(data)\" OBRIEN='value'";
         File.WriteAllText(Path.Combine(folder,"MsiComponent.ps1"),DattoRmmDeploymentService.Generate(source,entry,proof,null).Component);
         DattoRmmDeploymentService.Export(Path.Combine(folder,"msi-kit.zip"),source,entry,proof,null);
+        var msiArguments = proof.CombinedSilentArguments;
+        foreach (var arguments in new[]
+        {
+            "/qn CET_VERSIONID=64-bit TRANSFORMS=:InstanceId01",
+            "/qn TRANSFORMS=\":Instance 01;:Vendor Defaults.mst\" MSINEWINSTANCE=1",
+            "/qn \"TRANSFORMS=:InstanceId01\"",
+            "/qn COMMENT=\"Example TRANSFORMS=external.mst\""
+        })
+        {
+            proof.CombinedSilentArguments = arguments;
+            var embedded = DattoRmmDeploymentService.Generate(source, entry, proof, null);
+            check(embedded.Install.Contains(arguments), "Datto preserves validated MSI arguments without requiring a ZIP: " + arguments);
+        }
+        foreach (var arguments in new[]
+        {
+            "/qn TRANSFORMS=custom.mst", "/qn TRANSFORMS=\":InstanceId01;custom.mst\"",
+            "/qn TRANSFORMS=@custom.mst", "/qn TRANSFORMS=:InstanceId01 TRANSFORMS=custom.mst",
+            "/qn TRANSFORMS=", "/qn TRANSFORMS=\":InstanceId01", "/qn TRANSFORMS = custom.mst"
+        })
+        {
+            proof.CombinedSilentArguments = arguments;
+            check(DattoRmmDeploymentService.BlockReason(source, entry, proof, null)?.Contains("validated installer ZIP") == true,
+                "Datto blocks external or ambiguous transform arguments: " + arguments);
+        }
+        proof.CombinedSilentArguments = msiArguments;
 
         var msiEntry = new UninstallEntry { WindowsInstaller = 1, ProductCode = "{11111111-1111-1111-1111-111111111111}" };
         var msiRemoval = new InstallAnalysis

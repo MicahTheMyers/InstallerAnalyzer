@@ -24,7 +24,8 @@ internal static class LiveSandboxChecks
         return System.Text.RegularExpressions.Regex.Matches(environments.GetRawText(), @"[a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}")
             .Select(m => m.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
-    public static int Run(string root, string installerPath, TimeSpan? budget = null, bool requirePropertySnapshot = false, string? archiveEntry = null)
+    public static int Run(string root, string installerPath, TimeSpan? budget = null, bool requirePropertySnapshot = false,
+        string? archiveEntry = null, bool installerCompatibility = false)
     {
         Directory.CreateDirectory(root);
         var before = EnvironmentIds();
@@ -41,7 +42,8 @@ internal static class LiveSandboxChecks
             var installer = new InstallerDetector().Analyze(installerPath);
             installer.Archive = archive;
             Console.WriteLine("Installer: " + Path.GetFileName(installerPath) + "; hash " + installer.Identity.Sha256);
-            session = SandboxIssRecorder.Start(installerPath, installer.Kind, false, installer.SuggestedArguments, "", true, true, archive: archive);
+            session = SandboxIssRecorder.Start(installerPath, installer.Kind, false, installer.SuggestedArguments, "", true, true,
+                installerCompatibility: installerCompatibility, archive: archive);
             Console.WriteLine("Fresh Sandbox launched; session " + session.SessionFolder);
             var start = DateTime.UtcNow; string previousStage = "";
             while (DateTime.UtcNow - start < (budget ?? TimeSpan.FromMinutes(14)))

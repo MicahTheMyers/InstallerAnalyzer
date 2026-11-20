@@ -1646,9 +1646,6 @@ $IsCetMsi=$InstallerKind -eq 'Msi' -and $script:MsiStaticMetadata.Manufacturer -
 $CetHasDataPrompt=$false
 if($IsCetMsi){
     $SilentOnly=$true
-    $CetHasDataPrompt=@(Get-MsiRemovalUiActions $Installer | Where-Object {
-      $_.Action -eq 'CETShowClearUserDataDialogOnUninstall' -and $_.Condition -eq 'REMOVE AND NOT USED_DATA_ALREADY_REMOVED=1'
-    }).Count -gt 0
 }
 
 $result=[ordered]@{ ValidationSchemaVersion=3; EvidenceCollectionComplete=$false; UiTextEvidence=@(); RuntimeEnvironment=@(); PrerequisiteProbes=@(); PrerequisiteFiles=@(); DetectionStrategies=@(); Components=@(); ProcessTree=@(); NetworkActivity=@(); NewRebootIndicators=@(); PostRebootValidated=$false; InitialInstallValidated=$false; InitialUninstallValidated=$false; InitialUninstallExitCode=$null; CleanBaselineVerified=$false; RebootRequired=$false; SessionId=([guid]::NewGuid().ToString()); InstallerSha256=$null; Installer=[IO.Path]::GetFileName($Installer); InstallerExitCode=-1; CapturedAt=(Get-Date).ToString('o'); NewUninstallEntries=@(); PrimaryKey=$null; UninstallValidationMethod='Discovery only'; UninstallRecordingAttempted=$false; UninstallResponseFileCreated=$false; RecordedUninstallExitCode=$null; BaseSilentArguments=$BaseSilentArguments; AdditionalPackageArguments=$AdditionalPackageArguments; CombinedSilentArguments=$SilentInstallArguments; SilentInstallCommand=('"'+$Installer+'" '+$SilentInstallArguments).Trim(); SilentInstallStdOut=$null; SilentInstallStdErr=$null; SilentReinstallExitCode=$null; SilentReinstallValidated=$false; SilentReinstallUiDetected=$false; SilentReinstallVisibleWindows=@(); SilentUninstallExitCode=$null; SilentUninstallRawExitCode=$null; SilentUninstallUiDetected=$false; SilentUninstallVisibleWindows=@(); UiDiagnostics=@(); SilentStrategyCandidates=@(); SilentStrategyAttempts=@(); SelectedSilentStrategy=$null; PostUninstallDetected=$null; SilentUninstallValidated=$false; DiscoverySucceeded=$false; DiscoveryMethod=$null; DeploymentMechanism=$null; DeploymentSource=$Installer; IdentitySource=$null; UninstallCandidate=$null; ValidationError=$null; BootstrapperProcesses=@(); DiscoveredInstallerFiles=@(); BlockedBundledSoftware=@(); BlockedBundledSoftwareVerifiedAbsent=$null; WorkflowStage='Initial installation / discovery'; WorkflowStageUpdatedAt=(Get-Date).ToString('o'); WorkflowStageHistory=@() }
@@ -1693,6 +1690,11 @@ try {
       Copy-Item -LiteralPath 'C:\InstallerInput\Archive' -Destination 'C:\InstallerArchive' -Recurse -Force
       $result['InstallerArchiveEntry'] = $ArchiveEntry
       $result['InstallerArchiveSha256'] = $ArchiveSha256
+    }
+    if($IsCetMsi){
+      $CetHasDataPrompt=@(Get-MsiRemovalUiActions $Installer | Where-Object {
+        $_.Action -eq 'CETShowClearUserDataDialogOnUninstall' -and $_.Condition -eq 'REMOVE AND NOT USED_DATA_ALREADY_REMOVED=1'
+      }).Count -gt 0
     }
     if($IsLegacyProject){Initialize-LegacyProject}
     $script:MsiApplicationRegistryBaseline=@(Get-MsiApplicationRegistryBaseline)
